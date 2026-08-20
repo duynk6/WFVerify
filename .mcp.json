@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "winforms-verifier": {
+      "command": "E:/AgentTest/WFVerify/dist/WinFormsVerifier.McpServer.exe",
+      "args": [],
+      "env": {
+        "WFVERIFY_ALLOWED_ROOTS": "E:/AgentTest;C:/Projects",
+        "WFVERIFY_LOG_LEVEL": "Information"
+      }
+    }
+  }
+}
