@@ -18,9 +18,9 @@
    - Đảm bảo an toàn luồng COM cho FlaUI và UIA3.
    - Tích hợp cơ chế **Poison Detection** (cảnh báo session hỏng sau 2 lần timeout liên tiếp).
    - Tự động phát hiện và chặn lỗi `BLOCKED_BY_MODAL` khi ứng dụng hiển thị hộp thoại `MessageBox`.
-3. **Bộ 26 Công cụ MCP Toàn diện:**
+3. **Bộ 27 Công cụ MCP Toàn diện:**
    - **Diagnostics:** `wf_ping` (kiểm tra runtime, session, DPI scale).
-   - **App Lifecycle:** `wf_launch_app`, `wf_attach_app`, `wf_list_windows`, `wf_close_app`.
+   - **App Lifecycle:** `wf_launch_app` (hỗ trợ `arguments` + biến môi trường), `wf_attach_app` (chờ cửa sổ, tìm theo tiêu đề của mọi cửa sổ), `wf_list_windows`, `wf_detach_app`, `wf_close_app`.
    - **UI Inspection:** `wf_get_ui_tree` (cây UI compact text tiết kiệm ~55% token), `wf_find_elements`, `wf_get_element`.
    - **UI Interaction:** `wf_invoke`, `wf_set_value`, `wf_toggle`, `wf_select`, `wf_expand`, `wf_send_keys`, `wf_focus`, `wf_scroll_into_view`, `wf_grid_read`, `wf_grid_set_cell`, `wf_menu_click`, `wf_dialog_respond`.
    - **Synchronization:** `wf_wait_for`, `wf_wait_idle`.

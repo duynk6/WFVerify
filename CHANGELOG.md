@@ -4,6 +4,34 @@ Tất cả các thay đổi, bổ sung và quá trình triển khai dự án **W
 
 ---
 
+## [1.1.0] - 2026-08-21
+
+### ✨ Hỗ trợ ứng dụng cần đăng nhập / chọn SQL thủ công
+
+Với các dự án không thể tự khởi chạy (phải đăng nhập, chọn cơ sở dữ liệu, switch môi trường), quy trình đúng là **người dùng tự mở và chuẩn bị app → agent attach vào**. Bản này gỡ các rào cản của quy trình đó.
+
+#### 🐞 `wf_close_app` giết cả ứng dụng không do server khởi chạy (nghiêm trọng)
+- **Đã kiểm chứng bằng test thật:** mở SampleApp bằng tay (PID 4092) → `wf_attach_app` → `wf_close_app` → tiến trình bị giết. Tức là chỉ cần agent lỡ gọi `wf_close_app` là mất sạch phiên đăng nhập/kết nối CSDL đã dựng thủ công.
+- **Nguyên nhân:** tool gọi `Close()`/`Kill()` mà không kiểm tra `LaunchedByUs`, trái với chính Rule 6 trong `AGENTS.md`. (`UiSession.Dispose()` có kiểm tra, riêng tool thì không.)
+- **Sửa:** `wf_close_app` từ chối với `PATH_DENIED` khi `LaunchedByUs == false`, kèm hint chuyển sang `wf_detach_app`.
+
+#### ➕ `wf_detach_app` (tool mới, tổng số tool: 27)
+Rời session mà không đụng tới tiến trình. Cảnh báo nếu detach khỏi app do chính server khởi chạy (sẽ không còn được tự dọn dẹp).
+
+#### ⬆️ `wf_attach_app` gia cố
+- Thêm `waitForWindowMs` (mặc định 0) + retry, để attach được vào ứng dụng đang khởi động.
+- Tìm theo `windowTitle` nay quét **mọi cửa sổ đang hiển thị** qua Win32 `EnumWindows` thay vì chỉ `Process.MainWindowTitle` — app đang đứng ở form đăng nhập / splash / dialog chọn CSDL thường có `MainWindowTitle` rỗng nên trước đây không tìm ra.
+- Kết quả trả về thêm danh sách tiêu đề cửa sổ và ghi chú về `launchedByUs`.
+
+#### ⬆️ `wf_launch_app` nhận biến môi trường
+Tham số `environment` dạng `["TEN=GIA_TRI", ...]` (`ProcessStartInfo.Environment`), để đổi chuỗi kết nối SQL / cờ môi trường lúc khởi chạy mà không phải sửa file config.
+
+### 🧪 Kiểm thử
+- `AttachLifecycleTests`: `wf_close_app` phải từ chối và tiến trình phải còn sống; `wf_detach_app` giải phóng session mà app vẫn chạy; `NativeWindows.FindProcessesByWindowTitle` tìm được cửa sổ đăng nhập. Đã xác nhận test **fail** khi tạm gỡ guard.
+- Tổng: **25 test pass** (17 unit + 8 integration).
+
+---
+
 ## [1.0.1] - 2026-08-21
 
 ### 🐞 Sửa lỗi phát hiện qua kiểm thử thực tế

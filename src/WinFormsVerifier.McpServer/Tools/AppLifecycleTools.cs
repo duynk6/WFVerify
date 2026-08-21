@@ -29,6 +29,8 @@ public static class AppLifecycleTools
         string[]? arguments = null,
         [Description("Thư mục làm việc (Working Directory). Mặc định là thư mục chứa file .exe.")]
         string? workingDir = null,
+        [Description("Biến môi trường truyền cho tiến trình, mỗi phần tử dạng 'TEN=GIA_TRI' (vd 'ConnectionStrings__Main=Server=.;Database=UAT'). Dùng để đổi chuỗi kết nối SQL hoặc môi trường mà không phải sửa file config.")]
+        string[]? environment = null,
         [Description("Thời gian tối đa (ms) để chờ cửa sổ chính xuất hiện. Mặc định 15000ms.")]
         int waitForWindowMs = 15000,
         CancellationToken ct = default)
@@ -57,6 +59,25 @@ public static class AppLifecycleTools
                 foreach (var arg in arguments)
                 {
                     psi.ArgumentList.Add(arg);
+                }
+            }
+
+            if (environment != null && environment.Length > 0)
+            {
+                foreach (var entry in environment)
+                {
+                    if (string.IsNullOrWhiteSpace(entry)) continue;
+
+                    var sep = entry.IndexOf('=');
+                    if (sep <= 0)
+                    {
+                        throw new ToolException(
+                            ErrorCode.Internal,
+                            $"Biến môi trường '{entry}' không đúng định dạng.",
+                            "Mỗi phần tử phải có dạng 'TEN=GIA_TRI', ví dụ 'DB_ENV=UAT'.");
+                    }
+
+                    psi.Environment[entry[..sep].Trim()] = entry[(sep + 1)..];
                 }
             }
 
@@ -101,8 +122,10 @@ public static class AppLifecycleTools
         int? processId = null,
         [Description("Tên tiến trình (ProcessName, không bao gồm .exe), ví dụ 'SampleApp'.")]
         string? processName = null,
-        [Description("Tiêu đề hoặc một phần tiêu đề cửa sổ cần tìm để attach.")]
+        [Description("Tiêu đề hoặc một phần tiêu đề cửa sổ cần tìm để attach. So khớp với MỌI cửa sổ đang hiển thị, nên vẫn tìm được khi ứng dụng đang đứng ở form đăng nhập hoặc dialog chọn cơ sở dữ liệu.")]
         string? windowTitle = null,
+        [Description("Thời gian tối đa (ms) chờ tiến trình/cửa sổ xuất hiện trước khi báo lỗi. Mặc định 0 (không chờ). Đặt vài nghìn ms nếu ứng dụng đang khởi động.")]
+        int waitForWindowMs = 0,
         CancellationToken ct = default)
     {
         return await McpResults.GuardAsync(async () =>
@@ -122,10 +145,21 @@ public static class AppLifecycleTools
             }
             else if (!string.IsNullOrWhiteSpace(processName))
             {
-                var procs = Process.GetProcessesByName(processName.Replace(".exe", ""));
+                var wanted = processName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
+                var procs = await WaitForAsync(
+                    () =>
+                    {
+                        var found = Process.GetProcessesByName(wanted);
+                        return found.Length > 0 ? found : null;
+                    },
+                    waitForWindowMs, ct) ?? Array.Empty<Process>();
+
                 if (procs.Length == 0)
                 {
-                    throw new ToolException(ErrorCode.NoSession, $"Không tìm thấy tiến trình nào có tên '{processName}'.");
+                    throw new ToolException(
+                        ErrorCode.NoSession,
+                        $"Không tìm thấy tiến trình nào có tên '{processName}'" + (waitForWindowMs > 0 ? $" sau {waitForWindowMs}ms chờ." : "."),
+                        "Kiểm tra ứng dụng đã chạy chưa, hoặc tăng 'waitForWindowMs' nếu nó đang khởi động.");
                 }
                 if (procs.Length > 1)
                 {
@@ -146,30 +180,39 @@ public static class AppLifecycleTools
             }
             else if (!string.IsNullOrWhiteSpace(windowTitle))
             {
-                var procs = Process.GetProcesses()
-                    .Where(p => p.MainWindowTitle.Contains(windowTitle, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (procs.Count == 0)
-                {
-                    throw new ToolException(ErrorCode.NoSession, $"Không tìm thấy cửa sổ nào chứa tiêu đề '{windowTitle}'.");
-                }
-                if (procs.Count > 1)
-                {
-                    var candidates = procs.Select(p => new CandidateDto
+                // Quét MỌI cửa sổ hiển thị chứ không chỉ MainWindowTitle: app đang ở form
+                // đăng nhập / splash / dialog chọn DB thường có MainWindowTitle rỗng.
+                var matches = await WaitForAsync(
+                    () =>
                     {
-                        Selector = $"processId:{p.Id}",
-                        Name = p.MainWindowTitle,
-                        AutomationId = p.Id.ToString()
+                        var found = NativeWindows.FindProcessesByWindowTitle(windowTitle);
+                        return found.Count > 0 ? found : null;
+                    },
+                    waitForWindowMs, ct) ?? new Dictionary<int, string>();
+
+                if (matches.Count == 0)
+                {
+                    throw new ToolException(
+                        ErrorCode.NoSession,
+                        $"Không tìm thấy cửa sổ nào chứa tiêu đề '{windowTitle}'" + (waitForWindowMs > 0 ? $" sau {waitForWindowMs}ms chờ." : "."),
+                        "Kiểm tra lại tiêu đề, hoặc tăng 'waitForWindowMs' nếu ứng dụng đang khởi động.");
+                }
+                if (matches.Count > 1)
+                {
+                    var candidates = matches.Select(kv => new CandidateDto
+                    {
+                        Selector = $"processId:{kv.Key}",
+                        Name = kv.Value,
+                        AutomationId = kv.Key.ToString()
                     }).ToList();
 
                     throw new ToolException(
                         ErrorCode.Ambiguous,
-                        $"Tìm thấy {procs.Count} cửa sổ khớp với '{windowTitle}'. Hãy chỉ định rõ 'processId'.",
+                        $"Tìm thấy {matches.Count} tiến trình có cửa sổ khớp với '{windowTitle}'. Hãy chỉ định rõ 'processId'.",
                         candidates: candidates);
                 }
 
-                app = Application.Attach(procs[0].Id);
+                app = Application.Attach(matches.Keys.First());
             }
             else
             {
@@ -178,12 +221,77 @@ public static class AppLifecycleTools
 
             session.SetSession(app, launchedByUs: false);
 
+            var pid = app.ProcessId;
+            var visibleWindows = NativeWindows.GetVisibleTopLevelWindows()
+                .Where(w => w.ProcessId == pid && !string.IsNullOrWhiteSpace(w.Title))
+                .Select(w => w.Title)
+                .Distinct()
+                .ToList();
+
             return await Task.FromResult(McpResults.Ok(new
             {
-                processId = app.ProcessId,
-                processName = Process.GetProcessById(app.ProcessId).ProcessName,
-                attached = true
+                processId = pid,
+                processName = Process.GetProcessById(pid).ProcessName,
+                attached = true,
+                launchedByUs = false,
+                windows = visibleWindows,
+                note = "Tiến trình này KHÔNG do server khởi chạy nên sẽ không bị đóng khi kết thúc session. Dùng wf_detach_app để rời session mà vẫn giữ ứng dụng chạy."
             }));
+        });
+    }
+
+    /// <summary>Chờ cho tới khi probe trả về khác null, hoặc hết thời gian.</summary>
+    private static async Task<T?> WaitForAsync<T>(Func<T?> probe, int timeoutMs, CancellationToken ct) where T : class
+    {
+        var first = probe();
+        if (first != null || timeoutMs <= 0)
+        {
+            return first;
+        }
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(250, ct);
+            var found = probe();
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    [McpServerTool(Name = "wf_detach_app")]
+    [Description(
+        "Rời khỏi session hiện tại mà KHÔNG đóng ứng dụng — tiến trình vẫn tiếp tục chạy. " +
+        "Dùng tool này khi làm việc xong với một ứng dụng được attach bằng wf_attach_app " +
+        "(ví dụ app đã được đăng nhập / chọn cơ sở dữ liệu thủ công), thay cho wf_close_app.")]
+    public static async Task<CallToolResult> DetachApp(
+        UiSession session,
+        CancellationToken ct = default)
+    {
+        return await McpResults.GuardAsync(async () =>
+        {
+            if (session.App == null)
+            {
+                return await Task.FromResult(McpResults.Ok(new { message = "Không có session nào đang mở." }));
+            }
+
+            var pid = session.ProcessId;
+            var launchedByUs = session.LaunchedByUs;
+            session.ResetSession();
+
+            var warnings = launchedByUs
+                ? new[] { $"Tiến trình {pid} do server khởi chạy nhưng nay đã tách khỏi session, nên sẽ KHÔNG được tự dọn dẹp khi server tắt. Hãy tự đóng ứng dụng khi xong." }
+                : null;
+
+            return await Task.FromResult(McpResults.Ok(new
+            {
+                message = $"Đã tách khỏi session (PID: {pid}). Ứng dụng vẫn đang chạy.",
+                detachedPid = pid
+            }, warnings));
         });
     }
 
@@ -269,6 +377,18 @@ public static class AppLifecycleTools
             if (session.App == null)
             {
                 return McpResults.Ok(new { message = "Không có session ứng dụng nào đang mở." });
+            }
+
+            // AGENTS.md Rule 6: chỉ được kết thúc tiến trình do server khởi chạy.
+            // Ứng dụng do người dùng tự mở thường đã đăng nhập / chọn CSDL bằng tay
+            // — đóng nó đi là phá mất phiên làm việc không dựng lại được.
+            if (!session.LaunchedByUs)
+            {
+                throw new ToolException(
+                    ErrorCode.PathDenied,
+                    $"Tiến trình {session.ProcessId} không do server khởi chạy (attach vào) nên không được phép đóng.",
+                    "Dùng wf_detach_app để rời session mà vẫn giữ ứng dụng chạy. Nếu thật sự cần đóng, hãy tự đóng ứng dụng đó.",
+                    details: new { processId = session.ProcessId, launchedByUs = false });
             }
 
             var pid = session.ProcessId;

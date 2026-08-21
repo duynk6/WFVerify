@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**WinForms Verifier** — an MCP (Model Context Protocol) server on .NET 8 (`net8.0-windows`, x64) that gives AI agents three capabilities over Windows Forms apps: live UI automation (FlaUI/UIA3), screenshot capture with downscaling, and Roslyn static analysis of Designer code. 26 tools, all prefixed `wf_`.
+**WinForms Verifier** — an MCP (Model Context Protocol) server on .NET 8 (`net8.0-windows`, x64) that gives AI agents three capabilities over Windows Forms apps: live UI automation (FlaUI/UIA3), screenshot capture with downscaling, and Roslyn static analysis of Designer code. 27 tools, all prefixed `wf_`.
 
 Key packages: `ModelContextProtocol 2.2.0`, `FlaUI.UIA3 5.0.0`, `Microsoft.CodeAnalysis.CSharp.Workspaces 4.8.0`, `Microsoft.Extensions.Hosting 8.0.1`.
 
@@ -47,7 +47,7 @@ Hierarchical, `>`-separated: `id:grid > grid:2,3`. Segment prefixes: `id:`, `nam
 3. **Tools stay thin.** Validate → `McpResults.GuardAsync` → delegate to a domain service. Business logic belongs in `Services/`.
 4. **Every tool returns the standard envelope.** `McpResults.Ok(data, warnings)` / `McpResults.Fail(code, message, hint, candidates, details)`; failures set `IsError = true`. Codes live in `Models/ErrorCode.cs`. Throw `ToolException` from services — `GuardAsync` converts it. Selector failures must carry candidates; blocked-by-modal must return `BLOCKED_BY_MODAL` with the dialog title/text/buttons rather than timing out.
 5. **PathGuard every path input.** Whitelist from `WFVERIFY_ALLOWED_ROOTS` (`;`-separated), else working dir + upward search for `.sln`/`.git`/`plan.md`. Launched processes use `ProcessStartInfo.ArgumentList`, never concatenated command lines, with `UseShellExecute = false`.
-6. **No orphaned processes.** Only kill processes where `LaunchedByUs == true`; dispose `UIA3Automation` to release COM.
+6. **No orphaned processes, and never kill what you didn't launch.** Only terminate processes where `LaunchedByUs == true` — `wf_close_app` refuses otherwise and points at `wf_detach_app`, which drops the session without touching the process. This matters for apps a human had to log into or point at a specific SQL environment by hand. Dispose `UIA3Automation` to release COM.
 7. **Interaction fallback chains** (see `.agents/rules/ui-automation-rules.md`): Invoke → `InvokePattern` → `SelectionItem` → `LegacyIAccessible.DoDefaultAction` → physical click; SetValue → `ValuePattern` → focus + SendKeys; Toggle → `TogglePattern` → `SelectionItem` → Invoke.
 8. **Images are raw bytes.** `ImageContentBlock.Data` takes `ReadOnlyMemory<byte>`; the SDK base64-encodes. Downscale before returning (cap ~4MB).
 
