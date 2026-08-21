@@ -79,7 +79,7 @@ public sealed class ElementLocator
                 if (nextScopes.Count >= limit) break;
             }
 
-            currentScopes = nextScopes.DistinctBy(e => e.Properties.NativeWindowHandle.ValueOrDefault).Take(limit).ToList();
+            currentScopes = nextScopes.DistinctBy(IdentityKey).Take(limit).ToList();
             if (currentScopes.Count == 0) break;
         }
 
@@ -117,7 +117,7 @@ public sealed class ElementLocator
         if (!string.IsNullOrEmpty(segment.NameContains))
         {
             var all = scope.FindAllDescendants();
-            var matched = all.FirstOrDefault(e => e.Name?.Contains(segment.NameContains, StringComparison.OrdinalIgnoreCase) == true);
+            var matched = all.FirstOrDefault(e => e.SafeName().Contains(segment.NameContains, StringComparison.OrdinalIgnoreCase));
             if (matched != null) return matched;
         }
 
@@ -184,7 +184,7 @@ public sealed class ElementLocator
         else if (!string.IsNullOrEmpty(segment.NameContains))
         {
             var all = scope.FindAllDescendants();
-            results.AddRange(all.Where(e => e.Name?.Contains(segment.NameContains, StringComparison.OrdinalIgnoreCase) == true));
+            results.AddRange(all.Where(e => e.SafeName().Contains(segment.NameContains, StringComparison.OrdinalIgnoreCase)));
         }
         else if (!string.IsNullOrEmpty(segment.ControlType) && Enum.TryParse<ControlType>(segment.ControlType, true, out var ct))
         {
@@ -217,11 +217,19 @@ public sealed class ElementLocator
 
             foreach (var el in allElements)
             {
-                if (el.IsOffscreen) continue;
-
-                var id = el.AutomationId;
-                var name = el.Name;
-                var type = el.ControlType.ToString();
+                // Guard per element: một element lỗi property không được làm hỏng cả danh sách gợi ý
+                string id, name, type;
+                try
+                {
+                    if (el.SafeIsOffscreen()) continue;
+                    id = el.SafeAutomationId();
+                    name = el.SafeName();
+                    type = el.SafeControlTypeName();
+                }
+                catch
+                {
+                    continue;
+                }
 
                 double scoreId = !string.IsNullOrEmpty(id) ? CalculateSimilarity(query, id) : 0;
                 double scoreName = !string.IsNullOrEmpty(name) ? CalculateSimilarity(query, name) : 0;
@@ -251,6 +259,30 @@ public sealed class ElementLocator
             .DistinctBy(c => c.Selector)
             .Take(take)
             .ToList();
+    }
+
+    /// <summary>
+    /// Khóa định danh để loại trùng. Không dùng riêng NativeWindowHandle vì các control
+    /// không có HWND riêng (ToolStrip item, DataGridView cell) đều trả về cùng một handle
+    /// của container -> DistinctBy sẽ gộp nhầm các element khác nhau thành một.
+    /// </summary>
+    private static string IdentityKey(AutomationElement e)
+    {
+        try
+        {
+            var runtimeId = e.Properties.RuntimeId.ValueOrDefault;
+            if (runtimeId is { Length: > 0 })
+            {
+                return string.Join(".", runtimeId);
+            }
+        }
+        catch
+        {
+            // rơi xuống khóa tổng hợp bên dưới
+        }
+
+        var rect = e.SafeBoundingRectangle();
+        return $"{e.SafeNativeWindowHandle()}|{e.SafeAutomationId()}|{e.SafeName()}|{e.SafeControlTypeName()}|{rect.X},{rect.Y},{rect.Width},{rect.Height}";
     }
 
     public static double CalculateSimilarity(string source, string target)

@@ -49,9 +49,9 @@ public static class WaitTools
                         return state.ToLowerInvariant() switch
                         {
                             "exists" => el != null,
-                            "visible" => el != null && !el.IsOffscreen,
-                            "enabled" => el != null && el.IsEnabled,
-                            "gone" => el == null || el.IsOffscreen,
+                            "visible" => el != null && !el.SafeIsOffscreen(),
+                            "enabled" => el != null && el.SafeIsEnabled(),
+                            "gone" => el == null || el.SafeIsOffscreen(),
                             _ => el != null
                         };
                     }

@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using WinFormsVerifier.Infrastructure;
 
 namespace WinFormsVerifier.Models;
 
@@ -43,20 +44,25 @@ public class ElementDto
 
     public static ElementDto FromAutomationElement(AutomationElement element)
     {
+        var id = element.SafeAutomationId();
+        var name = element.SafeName();
+        var className = element.SafeClassName();
+        var helpText = element.SafeHelpText();
+
         var dto = new ElementDto
         {
-            Id = string.IsNullOrEmpty(element.AutomationId) ? null : element.AutomationId,
-            Name = string.IsNullOrEmpty(element.Name) ? null : element.Name,
-            Type = element.ControlType.ToString(),
-            ClassName = string.IsNullOrEmpty(element.ClassName) ? null : element.ClassName,
-            HelpText = string.IsNullOrEmpty(element.HelpText) ? null : element.HelpText,
-            IsEnabled = element.IsEnabled,
-            IsOffscreen = element.IsOffscreen
+            Id = string.IsNullOrEmpty(id) ? null : id,
+            Name = string.IsNullOrEmpty(name) ? null : name,
+            Type = element.SafeControlTypeName(),
+            ClassName = string.IsNullOrEmpty(className) ? null : className,
+            HelpText = string.IsNullOrEmpty(helpText) ? null : helpText,
+            IsEnabled = element.SafeIsEnabled(),
+            IsOffscreen = element.SafeIsOffscreen()
         };
 
         try
         {
-            var rect = element.BoundingRectangle;
+            var rect = element.SafeBoundingRectangle();
             if (!rect.IsEmpty)
             {
                 dto.Bounds = new[] { (int)rect.X, (int)rect.Y, (int)rect.Width, (int)rect.Height };

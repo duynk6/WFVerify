@@ -85,7 +85,7 @@ public sealed class ScreenshotService
                 OriginalHeight = origH,
                 ScaledWidth = scaledW,
                 ScaledHeight = scaledH,
-                TargetName = !string.IsNullOrEmpty(element.Name) ? element.Name : element.AutomationId
+                TargetName = element.SafeLabel()
             };
         }
     }

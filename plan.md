@@ -18,7 +18,7 @@ Các giả định của guide v1 đã được kiểm chứng lại bằng prob
 | Bootstrap | `WebApplication` + `app.MapMcpTool()` + `RunMcpServerAsync()` | **Không tồn tại.** Đúng là `Host.CreateApplicationBuilder` + `AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly()` |
 | Khai báo tool | delegate inline | Attribute `[McpServerToolType]` / `[McpServerTool]` + `[Description]` |
 | Inject service vào tool | không có | ✅ Tham số kiểu service được DI resolve tự động, **không** lọt vào `inputSchema` |
-| Trả ảnh | `string` base64 | `CallToolResult` chứa `ImageContentBlock`; `Data` là **`ReadOnlyMemory<byte>`** (raw bytes, SDK tự base64) |
+| Trả ảnh | `string` base64 | `CallToolResult` chứa `ImageContentBlock`. ⚠️ ĐÍNH CHÍNH (2026-08-21): `Data` là `ReadOnlyMemory<byte>` nhưng chứa **base64 đã encode dạng UTF-8 bytes**, KHÔNG phải raw bytes. Phải dùng `ImageContentBlock.FromBytes(bytes, mimeType)`. |
 | `element.Capture()` | `image.Save(ms, ...)` | Trả `System.Drawing.Bitmap` — OK, nhưng phải downscale trước khi trả |
 | FlaUI | `4.0.0` | **`5.0.0`**; toàn bộ API dùng trong plan này đã compile OK |
 | Log | không đề cập | **Bắt buộc** đẩy về stderr, nếu không vỡ JSON-RPC |

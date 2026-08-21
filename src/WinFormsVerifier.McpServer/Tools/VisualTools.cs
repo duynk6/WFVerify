@@ -50,7 +50,10 @@ public static class VisualTools
                 Content =
                 {
                     new TextContentBlock { Text = shot.Describe() },
-                    new ImageContentBlock { Data = shot.Bytes, MimeType = shot.MimeType }
+                    // ImageContentBlock.Data KHÔNG phải raw bytes: nó là "base64-encoded UTF-8 bytes".
+                    // Gán thẳng bytes ảnh khiến client nhận chuỗi không phải base64 -> "Invalid Base64 string".
+                    // FromBytes() nhận bytes gốc và tự encode base64.
+                    ImageContentBlock.FromBytes(shot.Bytes, shot.MimeType)
                 }
             };
         });

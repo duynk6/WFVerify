@@ -2,6 +2,7 @@ using System.Text;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
+using WinFormsVerifier.Infrastructure;
 
 namespace WinFormsVerifier.Services;
 
@@ -39,12 +40,12 @@ public sealed class TreeSerializer
                 return;
             }
 
-            if (!includeInvisible && element.IsOffscreen)
+            if (!includeInvisible && element.SafeIsOffscreen())
             {
                 return;
             }
 
-            var typeStr = element.ControlType.ToString();
+            var typeStr = element.SafeControlTypeName();
             var shouldDisplay = allowedTypes.Count == 0 || allowedTypes.Contains(typeStr);
 
             if (shouldDisplay)
@@ -86,9 +87,9 @@ public sealed class TreeSerializer
     private static void AppendElementLine(StringBuilder sb, AutomationElement element, int depth)
     {
         var indent = new string(' ', depth * 2);
-        var type = element.ControlType.ToString();
-        var id = element.AutomationId;
-        var name = element.Name;
+        var type = element.SafeControlTypeName();
+        var id = element.SafeAutomationId();
+        var name = element.SafeName();
 
         sb.Append(indent);
         sb.Append(type.PadRight(12));
@@ -120,7 +121,7 @@ public sealed class TreeSerializer
         }
 
         // Check if disabled
-        if (!element.IsEnabled)
+        if (!element.SafeIsEnabled())
         {
             sb.Append(" DISABLED");
         }
@@ -128,7 +129,7 @@ public sealed class TreeSerializer
         // Bounds info
         try
         {
-            var rect = element.BoundingRectangle;
+            var rect = element.SafeBoundingRectangle();
             if (!rect.IsEmpty)
             {
                 sb.Append($" @{(int)rect.X},{(int)rect.Y} {(int)rect.Width}x{(int)rect.Height}");

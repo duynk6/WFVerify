@@ -33,9 +33,16 @@ public sealed class InteractionService
         var success = false;
         var p = element.Patterns;
 
+        // THỨ TỰ CỐ Ý: input phi chặn (PostMessage / mouse_event) TRƯỚC, pattern SAU.
+        // Lý do: UIA InvokePattern.Invoke() chạy ĐỒNG BỘ — nếu event handler của control
+        // gọi MessageBox.Show(), Invoke() không trả về cho tới khi dialog bị đóng, khiến
+        // luồng STA của server treo tới khi timeout (và poison detection báo session hỏng).
+        // Đã kiểm chứng bằng LiveUiWorkflowTests: đảo lại thành pattern-first làm test
+        // timeout 5s ngay tại bước click btnLogin (handler mở MessageBox).
+        // => KHÔNG đảo thứ tự này để "khớp" .agents/rules/ui-automation-rules.md.
         try
         {
-            var hwnd = element.Properties.NativeWindowHandle.ValueOrDefault;
+            var hwnd = element.SafeNativeWindowHandle();
             if (hwnd != IntPtr.Zero)
             {
                 PostMessage(hwnd, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
@@ -43,7 +50,7 @@ public sealed class InteractionService
             }
             else
             {
-                var rect = element.BoundingRectangle;
+                var rect = element.SafeBoundingRectangle();
                 if (!rect.IsEmpty && rect.Width > 0 && rect.Height > 0)
                 {
                     var x = rect.Left + rect.Width / 2;
@@ -102,17 +109,19 @@ public sealed class InteractionService
             var patterns = ElementDto.DetectSupportedPatterns(element);
             throw new ToolException(
                 ErrorCode.PatternUnsupported,
-                $"Control '{element.Name}' ({element.ControlType}) không hỗ trợ thao tác Invoke.",
+                $"Control '{element.SafeLabel()}' ({element.SafeControlTypeName()}) không hỗ trợ thao tác Invoke.",
                 $"Các pattern khả dụng: [{string.Join(", ", patterns)}].",
                 details: new { Patterns = patterns });
         }
 
-        return PostAction($"Đã click/kích hoạt '{element.Name ?? element.AutomationId ?? element.ControlType.ToString()}'.");
+        return PostAction($"Đã click/kích hoạt '{element.SafeLabel()}'.");
     }
 
     public InteractionResult SetValue(AutomationElement element, string value, string mode = "replace", bool verify = true)
     {
         CheckModalBlock();
+
+        var isPassword = element.SafeIsPassword();
 
         var targetValue = value;
         if (mode.Equals("append", StringComparison.OrdinalIgnoreCase))
@@ -122,6 +131,10 @@ public sealed class InteractionService
         }
 
         var setSuccess = false;
+
+        // Ô mật khẩu vẫn dùng ValuePattern: đã kiểm chứng trên WinForms TextBox có
+        // PasswordChar thì SetValue có tác dụng (chỉ ĐỌC lại mới bị chặn -> "Access denied").
+        // Điểm cần canh là đường bàn phím phía dưới, xem FocusForTyping.
         if (element.Patterns.Value.IsSupported && !element.Patterns.Value.Pattern.IsReadOnly.Value)
         {
             try
@@ -136,8 +149,8 @@ public sealed class InteractionService
         {
             try
             {
-                element.Focus();
-                Thread.Sleep(50);
+                FocusForTyping(element);
+
                 if (mode.Equals("replace", StringComparison.OrdinalIgnoreCase))
                 {
                     Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
@@ -146,27 +159,79 @@ public sealed class InteractionService
                 Keyboard.Type(targetValue);
                 setSuccess = true;
             }
+            catch (ToolException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 throw new ToolException(
                     ErrorCode.PatternUnsupported,
-                    $"Không thể nhập giá trị vào control '{element.Name}': {ex.Message}",
+                    $"Không thể nhập giá trị vào control '{element.SafeLabel()}': {ex.Message}",
                     "Hãy kiểm tra xem control có bị Read-Only hoặc disabled không.");
             }
         }
 
-        var res = PostAction($"Đã đặt giá trị cho '{element.Name ?? element.AutomationId}' thành '{targetValue}'.");
+        var shownValue = isPassword ? new string('*', targetValue.Length) : targetValue;
+        var res = PostAction($"Đã đặt giá trị cho '{element.SafeLabel()}' thành '{shownValue}'.");
 
         if (verify)
         {
-            var readBack = GetElementValue(element);
-            if (!string.Equals(readBack, targetValue, StringComparison.Ordinal))
+            if (isPassword)
             {
-                res.Warnings.Add($"Giá trị đọc lại sau khi set ('{readBack}') không khớp hoàn toàn với giá trị đã đặt ('{targetValue}').");
+                // Đọc lại ô mật khẩu luôn trả "Access denied" — so sánh sẽ luôn sai, đừng báo nhầm.
+                res.Warnings.Add(
+                    "Đây là ô mật khẩu nên không thể đọc lại để xác thực (UIA chặn). " +
+                    "Giá trị đã được gõ bằng bàn phím; hãy kiểm tra kết quả qua hành vi của ứng dụng.");
+            }
+            else
+            {
+                var readBack = GetElementValue(element);
+                if (!string.Equals(readBack, targetValue, StringComparison.Ordinal))
+                {
+                    res.Warnings.Add($"Giá trị đọc lại sau khi set ('{readBack}') không khớp hoàn toàn với giá trị đã đặt ('{targetValue}').");
+                }
             }
         }
 
         return res;
+    }
+
+    /// <summary>
+    /// Đảm bảo control thật sự nhận keyboard focus trước khi gõ. Nếu cửa sổ không ở
+    /// foreground thì Keyboard.Type() sẽ gõ vào ứng dụng khác (hoặc rơi vào hư không) mà
+    /// không hề báo lỗi — tool sẽ báo "đã nhập" trong khi ô vẫn rỗng.
+    /// </summary>
+    private static void FocusForTyping(AutomationElement element)
+    {
+        var root = element.SafeNativeWindowHandle();
+        if (root != IntPtr.Zero)
+        {
+            root = GetAncestor(root, GA_ROOT);
+            if (root != IntPtr.Zero)
+            {
+                SetForegroundWindow(root);
+                Thread.Sleep(50);
+            }
+        }
+
+        try { element.Focus(); } catch { /* thử tiếp bằng FocusNative */ }
+        Thread.Sleep(50);
+
+        if (!element.SafeHasKeyboardFocus())
+        {
+            try { element.FocusNative(); } catch { /* ignore */ }
+            Thread.Sleep(80);
+        }
+
+        if (!element.SafeHasKeyboardFocus())
+        {
+            throw new ToolException(
+                ErrorCode.Internal,
+                $"Không đưa được keyboard focus vào '{element.SafeLabel()}' nên không thể nhập bằng bàn phím.",
+                "Cửa sổ ứng dụng có thể đang bị che hoặc minimize. Gọi wf_focus vào cửa sổ trước, " +
+                "hoặc đảm bảo màn hình không bị khoá.");
+        }
     }
 
     public InteractionResult Toggle(AutomationElement element, string state = "toggle")
@@ -191,13 +256,13 @@ public sealed class InteractionService
                 element.Patterns.Toggle.Pattern.Toggle();
             }
 
-            return PostAction($"Đã chuyển trạng thái toggle của '{element.Name}' sang '{element.Patterns.Toggle.Pattern.ToggleState.Value}'.");
+            return PostAction($"Đã chuyển trạng thái toggle của '{element.SafeLabel()}' sang '{element.Patterns.Toggle.Pattern.ToggleState.Value}'.");
         }
 
         if (element.Patterns.SelectionItem.IsSupported)
         {
             element.Patterns.SelectionItem.Pattern.Select();
-            return PostAction($"Đã chọn '{element.Name}'.");
+            return PostAction($"Đã chọn '{element.SafeLabel()}'.");
         }
 
         return Invoke(element);
@@ -211,7 +276,7 @@ public sealed class InteractionService
         if (element.Patterns.SelectionItem.IsSupported)
         {
             element.Patterns.SelectionItem.Pattern.Select();
-            return PostAction($"Đã chọn mục '{element.Name}'.");
+            return PostAction($"Đã chọn mục '{element.SafeLabel()}'.");
         }
 
         // If it is a container (ComboBox / ListBox / TabControl)
@@ -238,12 +303,12 @@ public sealed class InteractionService
             {
                 target.Click();
             }
-            return PostAction($"Đã chọn index {index.Value} ('{target.Name}') trong '{element.Name}'.");
+            return PostAction($"Đã chọn index {index.Value} ('{target.SafeLabel()}') trong '{element.SafeLabel()}'.");
         }
 
         if (!string.IsNullOrEmpty(item))
         {
-            var matched = children.FirstOrDefault(c => c.Name?.Contains(item, StringComparison.OrdinalIgnoreCase) == true);
+            var matched = children.FirstOrDefault(c => c.SafeName().Contains(item, StringComparison.OrdinalIgnoreCase));
             if (matched != null)
             {
                 if (matched.Patterns.SelectionItem.IsSupported)
@@ -254,13 +319,13 @@ public sealed class InteractionService
                 {
                     matched.Click();
                 }
-                return PostAction($"Đã chọn mục '{matched.Name}' trong '{element.Name}'.");
+                return PostAction($"Đã chọn mục '{matched.SafeLabel()}' trong '{element.SafeLabel()}'.");
             }
 
             throw new ToolException(
                 ErrorCode.ElementNotFound,
-                $"Không tìm thấy mục '{item}' trong danh sách '{element.Name}'.",
-                $"Danh sách các mục có sẵn: [{string.Join(", ", children.Select(c => c.Name))}]");
+                $"Không tìm thấy mục '{item}' trong danh sách '{element.SafeLabel()}'.",
+                $"Danh sách các mục có sẵn: [{string.Join(", ", children.Select(c => c.SafeLabel()))}]");
         }
 
         throw new ToolException(ErrorCode.Internal, "Cần cung cấp ít nhất tham số 'item' hoặc 'index' để select.");
@@ -280,16 +345,16 @@ public sealed class InteractionService
             {
                 element.Patterns.ExpandCollapse.Pattern.Collapse();
             }
-            return PostAction($"Đã {(expand ? "mở rộng" : "thu gọn")} '{element.Name}'.");
+            return PostAction($"Đã {(expand ? "mở rộng" : "thu gọn")} '{element.SafeLabel()}'.");
         }
 
-        throw new ToolException(ErrorCode.PatternUnsupported, $"Control '{element.Name}' không hỗ trợ ExpandCollapse.");
+        throw new ToolException(ErrorCode.PatternUnsupported, $"Control '{element.SafeLabel()}' không hỗ trợ ExpandCollapse.");
     }
 
     public InteractionResult Focus(AutomationElement element)
     {
         element.Focus();
-        return PostAction($"Đã focus vào '{element.Name ?? element.AutomationId}'.");
+        return PostAction($"Đã focus vào '{element.SafeLabel()}'.");
     }
 
     public InteractionResult ScrollIntoView(AutomationElement element)
@@ -297,10 +362,10 @@ public sealed class InteractionService
         if (element.Patterns.ScrollItem.IsSupported)
         {
             element.Patterns.ScrollItem.Pattern.ScrollIntoView();
-            return PostAction($"Đã cuộn tới '{element.Name}'.");
+            return PostAction($"Đã cuộn tới '{element.SafeLabel()}'.");
         }
 
-        throw new ToolException(ErrorCode.PatternUnsupported, $"Control '{element.Name}' không hỗ trợ ScrollItem.");
+        throw new ToolException(ErrorCode.PatternUnsupported, $"Control '{element.SafeLabel()}' không hỗ trợ ScrollItem.");
     }
 
     public InteractionResult SendKeys(string keys, AutomationElement? target = null)
@@ -355,7 +420,7 @@ public sealed class InteractionService
                 var cell = GetGridCellElement(element, r, c);
                 if (cell != null)
                 {
-                    cellText = GetElementValue(cell) ?? cell.Name ?? "";
+                    cellText = GetElementValue(cell) ?? cell.SafeName();
                 }
                 cellValues.Add(cellText.PadRight(15));
             }
@@ -448,7 +513,7 @@ public sealed class InteractionService
             {
                 // Try contains search
                 menuItem = currentScope.FindAllDescendants(cf => cf.ByControlType(ControlType.MenuItem))
-                    .FirstOrDefault(m => m.Name?.Contains(seg, StringComparison.OrdinalIgnoreCase) == true);
+                    .FirstOrDefault(m => m.SafeName().Contains(seg, StringComparison.OrdinalIgnoreCase));
             }
 
             if (menuItem == null)
@@ -483,6 +548,19 @@ public sealed class InteractionService
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+    private const uint GA_ROOT = 2;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -508,15 +586,32 @@ public sealed class InteractionService
 
     private const uint BM_CLICK = 0x00F5;
 
-    public InteractionResult DialogRespond(string buttonName)
+    public InteractionResult DialogRespond(string buttonName, int waitMs = 2000)
     {
-        var (hasModal, dialogHwnd, modalWindow, title, text, buttons) = _session.DetectBlockingModal();
+        // Dò lặp thay vì một lần: dialog có thể chưa kịp hiện khi tool được gọi ngay sau
+        // một thao tác khác. Nếu hết thời gian chờ mà vẫn không có -> dialog đã đóng từ trước.
+        var deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(0, waitMs));
+        bool hasModal;
+        IntPtr dialogHwnd;
+        Window? modalWindow;
+        string? title, text;
+        List<string>? buttons;
+
+        do
+        {
+            (hasModal, dialogHwnd, modalWindow, title, text, buttons) = _session.DetectBlockingModal();
+            if (hasModal) break;
+            Thread.Sleep(100);
+        }
+        while (DateTime.UtcNow < deadline);
+
         if (!hasModal)
         {
             throw new ToolException(
                 ErrorCode.WindowNotFound,
-                "Không có modal dialog nào đang mở để phản hồi.",
-                "Sử dụng wf_list_windows để kiểm tra các cửa sổ đang hoạt động.");
+                $"Không có modal dialog nào đang mở để phản hồi (đã chờ {waitMs}ms).",
+                "Dialog có thể đã tự đóng trước khi tool này chạy. Kiểm tra lại 'warnings' của thao tác trước đó, " +
+                "hoặc dùng wf_list_windows để xem các cửa sổ đang hoạt động.");
         }
 
         if (dialogHwnd != IntPtr.Zero)
@@ -547,12 +642,45 @@ public sealed class InteractionService
             if (targetBtnHwnd != IntPtr.Zero)
             {
                 SendMessage(targetBtnHwnd, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
-                Thread.Sleep(300);
-                return new InteractionResult
+
+                // BẮT BUỘC xác minh: BM_CLICK không phải lúc nào cũng đóng được dialog.
+                // Trước đây tool báo thành công ngay mà không kiểm tra, dẫn tới việc agent
+                // tưởng dialog đã đóng trong khi nó vẫn đang chặn ứng dụng.
+                if (WaitUntilDialogClosed(dialogHwnd, TimeSpan.FromMilliseconds(1500)))
                 {
-                    Success = true,
-                    Message = $"Đã bấm nút '{foundName}' để đóng modal dialog '{title}'."
-                };
+                    return new InteractionResult
+                    {
+                        Success = true,
+                        Message = $"Đã bấm nút '{foundName}' để đóng modal dialog '{title}'."
+                    };
+                }
+
+                // Thử lại bằng UIA trên chính nút đó trước khi bỏ cuộc.
+                try
+                {
+                    var btnElement = _session.Automation.FromHandle(targetBtnHwnd);
+                    if (btnElement?.Patterns.Invoke.IsSupported == true)
+                    {
+                        btnElement.Patterns.Invoke.Pattern.Invoke();
+                    }
+                }
+                catch { /* rơi xuống kiểm tra bên dưới */ }
+
+                if (WaitUntilDialogClosed(dialogHwnd, TimeSpan.FromMilliseconds(1500)))
+                {
+                    return new InteractionResult
+                    {
+                        Success = true,
+                        Message = $"Đã bấm nút '{foundName}' để đóng modal dialog '{title}' (qua InvokePattern sau khi BM_CLICK không ăn)."
+                    };
+                }
+
+                throw new ToolException(
+                    ErrorCode.Internal,
+                    $"Đã bấm nút '{foundName}' nhưng modal dialog '{title}' vẫn đang mở.",
+                    "Dialog có thể đang chờ thao tác khác, hoặc nút này không phải nút đóng. " +
+                    "Thử lại với tên nút khác, hoặc dùng wf_get_ui_tree để xem các nút hiện có trên dialog.",
+                    details: new { DialogTitle = title, ClickedButton = foundName, AvailableButtons = buttons });
             }
         }
 
@@ -562,17 +690,25 @@ public sealed class InteractionService
             if (btn == null)
             {
                 btn = modalWindow.FindAllDescendants(cf => cf.ByControlType(ControlType.Button))
-                    .FirstOrDefault(b => b.Name?.Contains(buttonName, StringComparison.OrdinalIgnoreCase) == true);
+                    .FirstOrDefault(b => b.SafeName().Contains(buttonName, StringComparison.OrdinalIgnoreCase));
             }
 
             if (btn != null)
             {
                 btn.Click();
-                Thread.Sleep(300);
+                if (!WaitUntilNoModal(TimeSpan.FromMilliseconds(1500)))
+                {
+                    throw new ToolException(
+                        ErrorCode.Internal,
+                        $"Đã bấm nút '{btn.SafeLabel()}' nhưng modal dialog '{title}' vẫn đang mở.",
+                        "Thử lại với tên nút khác, hoặc dùng wf_get_ui_tree để xem các nút hiện có trên dialog.",
+                        details: new { DialogTitle = title, AvailableButtons = buttons });
+                }
+
                 return new InteractionResult
                 {
                     Success = true,
-                    Message = $"Đã bấm nút '{btn.Name}' để đóng modal dialog '{title}'."
+                    Message = $"Đã bấm nút '{btn.SafeLabel()}' để đóng modal dialog '{title}'."
                 };
             }
         }
@@ -582,6 +718,39 @@ public sealed class InteractionService
             ErrorCode.ElementNotFound,
             $"Không tìm thấy nút '{buttonName}' trên modal dialog '{title}'.",
             $"Các nút có sẵn trên dialog: [{availableButtons}].");
+    }
+
+    /// <summary>Chờ tới khi handle dialog không còn là cửa sổ hiển thị.</summary>
+    private static bool WaitUntilDialogClosed(IntPtr dialogHwnd, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        do
+        {
+            if (!IsWindow(dialogHwnd) || !IsWindowVisible(dialogHwnd))
+            {
+                return true;
+            }
+            Thread.Sleep(75);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        return !IsWindow(dialogHwnd) || !IsWindowVisible(dialogHwnd);
+    }
+
+    private bool WaitUntilNoModal(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        do
+        {
+            if (!_session.DetectBlockingModal().HasModal)
+            {
+                return true;
+            }
+            Thread.Sleep(75);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        return !_session.DetectBlockingModal().HasModal;
     }
 
     private void CheckModalBlock()
@@ -640,6 +809,6 @@ public sealed class InteractionService
             // Ignore
         }
 
-        return element.Name;
+        return element.SafeName();
     }
 }

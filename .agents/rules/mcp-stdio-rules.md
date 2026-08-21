@@ -13,4 +13,5 @@
 3. **Result Envelopes:**
    - Always wrap tool logic in `McpResults.GuardAsync(...)`.
    - Never let unhandled exceptions crash the host or bypass the MCP error envelope.
-   - Image content blocks must provide raw bytes (`ReadOnlyMemory<byte>`) rather than base64 strings (the MCP SDK handles encoding).
+   - Image content blocks must be built with `ImageContentBlock.FromBytes(bytes, mimeType)`.
+     **Do not assign raw image bytes to `ImageContentBlock.Data`.** In MCP SDK 2.2.0 `Data` holds the *base64-encoded UTF-8 bytes*, not the decoded image; assigning PNG/JPEG bytes directly makes the client reject the response with "Invalid Base64 string". Covered by `ImageContentBlockTests`.

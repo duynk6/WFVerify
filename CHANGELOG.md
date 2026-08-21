@@ -4,6 +4,49 @@ Tất cả các thay đổi, bổ sung và quá trình triển khai dự án **W
 
 ---
 
+## [1.0.1] - 2026-08-21
+
+### 🐞 Sửa lỗi phát hiện qua kiểm thử thực tế
+
+#### 1. `wf_get_ui_tree` / `wf_find_elements` chết trên form có MenuStrip (nặng)
+- **Triệu chứng:** `PropertyNotSupportedException: The requested property 'AutomationId [#30011]' is not supported` ở mọi `maxDepth`.
+- **Nguyên nhân:** shortcut của FlaUI (`element.AutomationId`, `.Name`, `.IsOffscreen`, ...) trỏ vào `Properties.X.Value`, và getter này **ném exception** khi provider không cung cấp property. `ToolStripMenuItem` của WinForms không có `AutomationId`.
+- **Sửa:** thêm [`Infrastructure/UiaSafe.cs`](src/WinFormsVerifier.McpServer/Infrastructure/UiaSafe.cs) (đọc qua `ValueOrDefault` + try/catch) và thay toàn bộ shortcut trong `TreeSerializer`, `ElementDto`, `ElementLocator`, `InteractionService`, `ScreenshotService`, `WaitTools`, `AppLifecycleTools`. `SuggestCandidates` guard theo từng element để một node lỗi không làm hỏng cả danh sách gợi ý.
+- **Kèm theo:** `ElementLocator.ResolveAll` trước đây `DistinctBy(NativeWindowHandle)` — các control không có HWND riêng (ToolStrip item, ô DataGridView) dùng chung handle của container nên bị gộp nhầm thành một. Đổi sang khóa định danh `RuntimeId`.
+
+#### 2. `wf_screenshot` trả "Invalid Base64 string"
+- **Nguyên nhân:** trong MCP SDK 2.2.0, `ImageContentBlock.Data` là **base64 đã encode dạng UTF-8 bytes**, không phải bytes ảnh gốc (xác minh trong `ModelContextProtocol.Core.xml`). Code gán thẳng bytes PNG/JPEG vào `Data`.
+- **Sửa:** dùng `ImageContentBlock.FromBytes(bytes, mimeType)` trong [`VisualTools.cs`](src/WinFormsVerifier.McpServer/Tools/VisualTools.cs). Đính chính lại `plan.md` và `.agents/rules/mcp-stdio-rules.md` (cả hai đều ghi sai điểm này).
+
+#### 3. `wf_dialog_respond` trả `WINDOW_NOT_FOUND` sau `wf_menu_click`
+- **Chưa tái hiện được.** `MenuModalWorkflowTests` dựng lại đúng kịch bản (menu "Trợ giúp > Giới thiệu" của SampleApp mở `MessageBox`) và pass 4/4 lần chạy.
+- **Đã làm:** `DialogRespond` dò lặp trong 2000ms thay vì dò một lần (xử lý trường hợp dialog chưa kịp hiện), và khi thực sự không có dialog thì thông báo nêu rõ khả năng dialog đã đóng trước đó thay vì chỉ nói "không có dialog".
+
+### 🐞 Sửa thêm — phát hiện khi chạy thật qua MCP client
+
+#### 4. `wf_dialog_respond` báo thành công dù dialog chưa đóng
+- **Quan sát thực tế:** phải gọi 2 lần mới đóng được MessageBox "Lỗi đăng nhập"; lần đầu tool vẫn trả `ok: true`.
+- **Nguyên nhân:** sau `SendMessage(BM_CLICK)` code `Thread.Sleep(300)` rồi trả thành công **mà không kiểm tra dialog có đóng thật không**.
+- **Sửa:** thêm `WaitUntilDialogClosed` / `WaitUntilNoModal`. Nếu BM_CLICK không ăn thì thử lại bằng `InvokePattern` trên chính nút đó; vẫn không đóng được thì trả lỗi kèm danh sách nút thay vì báo thành công giả.
+
+#### 5. `wf_set_value` cảnh báo sai trên ô mật khẩu + gõ phím có thể rơi vào hư không
+- Ô có `PasswordChar` khi đọc lại luôn trả `Access denied`, khiến `verify` luôn báo "giá trị không khớp". Nay nhận diện ô mật khẩu và nói rõ là không thể xác thực, đồng thời che giá trị trong message.
+- Đường fallback bàn phím trước đây chỉ gọi `element.Focus()` rồi gõ. Nếu cửa sổ không ở foreground, `Keyboard.Type()` gõ vào nơi khác mà không báo lỗi — tool vẫn báo "đã nhập". Nay `FocusForTyping` đưa cửa sổ lên foreground, thử `Focus()` rồi `FocusNative()`, và **ném lỗi** nếu control không thực sự nhận keyboard focus.
+- **Chưa xác định được nguyên nhân** của một lần đăng nhập thất bại quan sát được khi test thật (lần 2 thành công). Giả thuyết "UIA chặn ValuePattern trên ô mật khẩu" đã bị bác bỏ bằng test: `ValuePattern.SetValue` vẫn có tác dụng. Các thay đổi trên là gia cố, không phải bản vá cho một nguyên nhân đã chứng minh.
+
+### 🧪 Kiểm thử
+- Thêm `ImageContentBlockTests` (3 test) — có một test khẳng định cách gán cũ **không** phải base64 hợp lệ.
+- `LiveUiWorkflowTests` mở rộng: duyệt cây MainForm (`maxDepth` 2 và 6), dựng `ElementDto` cho mọi descendant, `ResolveAll` trên menu item. Đã xác nhận test này **fail đúng lỗi gốc** khi tạm gỡ fix.
+- Thêm `MenuModalWorkflowTests`.
+- Thêm `AssemblyInfo.cs` tắt chạy song song cho integration test: hai class live UI chạy song song làm UIA trả `E_FAIL`.
+- Thêm `SetValue_OnPasswordField_ActuallyDeliversTheText`.
+- Tổng: **23 test pass** (17 unit + 6 integration).
+
+### ⚠️ Ghi chú kiến trúc
+- `InteractionService.Invoke` cố ý dùng input phi chặn (`PostMessage` / `mouse_event`) **trước** rồi mới tới UIA pattern. `InvokePattern.Invoke()` chạy đồng bộ nên treo luồng STA nếu handler mở `MessageBox`. `.agents/rules/ui-automation-rules.md` trước đây ghi ngược thứ tự này — đã sửa lại kèm cảnh báo.
+
+---
+
 ## [1.0.0] - 2026-08-20
 
 ### 🚀 Khởi tạo & Triển khai toàn diện (Initial Implementation)

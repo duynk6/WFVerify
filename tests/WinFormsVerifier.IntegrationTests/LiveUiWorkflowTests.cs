@@ -97,6 +97,41 @@ public class LiveUiWorkflowTests
             }, TimeSpan.FromSeconds(10));
             Assert.True(setCellResult.Success);
 
+            // 9b. Duyệt cây UI của MainForm — form này có MenuStrip/ToolStripMenuItem,
+            //     các control không cung cấp property AutomationId [#30011].
+            //     Trước khi sửa, TreeSerializer/ElementDto ném PropertyNotSupportedException tại đây.
+            var (mainTree, _) = await session.RunAsync(
+                () => serializer.Serialize(mainWindow, maxDepth: 6),
+                TimeSpan.FromSeconds(20));
+            Assert.False(string.IsNullOrWhiteSpace(mainTree), "Cây UI của MainForm không được rỗng.");
+            Assert.Contains("dgOrders", mainTree);
+
+            var (shallowTree, _) = await session.RunAsync(
+                () => serializer.Serialize(mainWindow, maxDepth: 2),
+                TimeSpan.FromSeconds(20));
+            Assert.False(string.IsNullOrWhiteSpace(shallowTree));
+
+            // 9c. ElementDto phải dựng được cho MỌI descendant, kể cả menu item thiếu AutomationId.
+            var dtoCount = await session.RunAsync(() =>
+            {
+                var all = mainWindow.FindAllDescendants();
+                var count = 0;
+                foreach (var el in all)
+                {
+                    var dto = ElementDto.FromAutomationElement(el);
+                    Assert.NotNull(dto.Type);
+                    count++;
+                }
+                return count;
+            }, TimeSpan.FromSeconds(30));
+            Assert.True(dtoCount > 0, "Phải đọc được ít nhất một element trên MainForm.");
+
+            // 9d. Tìm chính menu item gây lỗi ban đầu.
+            var menuItems = await session.RunAsync(
+                () => locator.ResolveAll(mainWindow, "type:MenuItem", limit: 20).Count,
+                TimeSpan.FromSeconds(20));
+            Assert.True(menuItems > 1, $"MainForm có nhiều menu item, ResolveAll chỉ trả về {menuItems}.");
+
             // 10. Capture Screenshot
             var screenshot = await session.RunAsync(() => screenshotService.Capture(mainWindow, maxWidth: 1000), TimeSpan.FromSeconds(10));
             Assert.NotNull(screenshot.Bytes);

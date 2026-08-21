@@ -77,7 +77,7 @@ public static class AppLifecycleTools
                 return mainWin;
             }, TimeSpan.FromMilliseconds(waitForWindowMs + 5000), ct);
 
-            var windowTitle = window?.Title ?? window?.Name ?? "(Chưa có tiêu đề)";
+            var windowTitle = window is null ? "(Chưa có tiêu đề)" : (window.SafeName() is { Length: > 0 } n ? n : "(Chưa có tiêu đề)");
 
             return McpResults.Ok(new
             {
@@ -229,8 +229,8 @@ public static class AppLifecycleTools
                             list.Add(new
                             {
                                 title = modal.Title,
-                                name = modal.Name,
-                                automationId = modal.AutomationId,
+                                name = modal.SafeName(),
+                                automationId = modal.SafeAutomationId(),
                                 isModal = true,
                                 isChildModal = true,
                                 parent = win.Title
