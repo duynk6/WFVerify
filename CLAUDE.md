@@ -34,7 +34,7 @@ Request flow: **MCP client → stdio JSON-RPC → Tool (thin) → `session.RunAs
 - `Services/UiThread.cs` — the single named `UIA-STA` thread with a `BlockingCollection<Action>` pump. `RunAsync<T>(work, timeout, ct)` marshals work onto it. Tracks `_consecutiveTimeouts`: two in a row escalates the error message to "session is poisoned, close and re-attach".
 - `Services/UiSession.cs` — owns `Application` + `UIA3Automation`. `ResolveWindow(selector)` prefers an active modal over the main window. `DetectBlockingModal` uses raw Win32 `EnumWindows` looking for class `#32770` (faster and more reliable than UIA for MessageBox).
 - `Services/ElementLocator.cs` — parses selectors, narrows scope segment by segment with `Retry.WhileNull`; on failure computes Levenshtein similarity over visible `Name`/`AutomationId` and returns the top 10 as `candidates` in the error envelope.
-- `Services/Roslyn/` — `DesignerModel` parses `InitializeComponent()` into a control tree; `FormRules` runs the 14 `WF001`–`WF060` checks; `FormAnalyzer` clusters the partial-class files (`Form1.cs` + `Form1.Designer.cs` + `Form1.*.cs`) into a tolerant `CSharpCompilation` (missing references are acceptable).
+- `Services/Roslyn/` — `DesignerModel` parses `InitializeComponent()` into a control tree; `FormRules` runs the 15 `WF001`–`WF060` checks; `FormAnalyzer` clusters the partial-class files (`Form1.cs` + `Form1.Designer.cs` + `Form1.*.cs`) into a tolerant `CSharpCompilation` (missing references are acceptable).
 
 ### Selector syntax
 

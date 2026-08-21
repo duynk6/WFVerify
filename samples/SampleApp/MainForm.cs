@@ -25,6 +25,11 @@ public partial class MainForm : Form
         cboStatus.SelectedIndex = 0;
     }
 
+    private void menuOrders_Click(object sender, EventArgs e)
+    {
+        new CatalogForm().Show(this);
+    }
+
     private void menuExit_Click(object sender, EventArgs e)
     {
         Application.Exit();

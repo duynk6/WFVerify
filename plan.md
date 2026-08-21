@@ -240,10 +240,11 @@ Prefix `wf_` cho mọi tool để tránh đụng tên với MCP server khác.
 ### 6.2. App lifecycle
 | Tool | Params | Mô tả |
 | :--- | :--- | :--- |
-| `wf_launch_app` | `exePath`, `arguments?`, `workingDir?`, `waitForWindowMs=15000` | Khởi chạy và chờ main window sẵn sàng. |
-| `wf_attach_app` | `processId?`, `processName?`, `windowTitle?` | Attach. Nhiều ứng viên → `AMBIGUOUS` kèm danh sách PID. |
+| `wf_launch_app` | `exePath`, `arguments?`, `environment?`, `workingDir?`, `waitForWindowMs=15000` | Khởi chạy và chờ main window sẵn sàng. `environment` dạng `["TEN=GIA_TRI"]` để đổi chuỗi kết nối SQL / cờ môi trường mà không sửa config. |
+| `wf_attach_app` | `processId?`, `processName?`, `windowTitle?`, `waitForWindowMs=0` | Attach. `windowTitle` so khớp **mọi cửa sổ đang hiển thị** (Win32 `EnumWindows`) chứ không chỉ `MainWindowTitle`, để bắt được app đang đứng ở form đăng nhập / dialog chọn CSDL. Nhiều ứng viên → `AMBIGUOUS` kèm danh sách PID. |
 | `wf_list_windows` | `includeChildren=false` | Liệt kê **mọi** top-level window + modal của process (title, handle, isModal, isActive). |
-| `wf_close_app` | `force=false`, `timeoutMs=5000` | `Close()` → chờ → `Kill()` nếu vẫn sống. Luôn dọn session. |
+| `wf_detach_app` | — | Rời session mà **không** đụng tới tiến trình. Cách đúng để kết thúc phiên với app được attach. |
+| `wf_close_app` | `force=false`, `timeoutMs=5000` | `Close()` → chờ → `Kill()` nếu vẫn sống. **Chỉ áp dụng cho tiến trình do server khởi chạy** (`LaunchedByUs == true`); attach vào app người dùng tự mở thì từ chối với `PATH_DENIED` và chỉ sang `wf_detach_app`. Xem §11. |
 
 ### 6.3. Inspection
 | Tool | Params | Mô tả |
@@ -579,15 +580,20 @@ public static async Task<CallToolResult> Screenshot(
         Content =
         {
             new TextContentBlock { Text = shot.Describe() },  // "Window 'X' 1920x1080 → scaled 1200x675"
-            new ImageContentBlock { Data = shot.Bytes, MimeType = shot.MimeType }
+            ImageContentBlock.FromBytes(shot.Bytes, shot.MimeType)
         }
     };
 }
 ```
 
-> `ImageContentBlock.Data` là `ReadOnlyMemory<byte>` — truyền **raw bytes**, SDK tự base64.
-> v1 trả `Convert.ToBase64String(...)` kiểu `string` → Claude nhận một khối text vô nghĩa chứ không phải ảnh,
-> đồng thời đốt sạch context.
+> ⚠️ **ĐÍNH CHÍNH (2026-08-21) — đã gây lỗi thật, đừng viết lại theo kiểu cũ.**
+> `ImageContentBlock.Data` đúng là `ReadOnlyMemory<byte>`, nhưng nội dung nó mong đợi là
+> **base64 đã encode dưới dạng UTF-8 bytes**, KHÔNG phải bytes ảnh thô. Gán thẳng bytes PNG/JPEG
+> vào `Data` khiến client từ chối với `Invalid Base64 string`.
+> Luôn dùng `ImageContentBlock.FromBytes(bytes, mimeType)` — hàm này nhận bytes gốc và tự encode.
+> Xem `ImageContentBlockTests` để biết bằng chứng.
+>
+> v1 trả `Convert.ToBase64String(...)` kiểu `string` → cũng sai, nhưng theo hướng khác.
 
 ---
 
@@ -688,7 +694,7 @@ Output của `wf_analyze_form`:
 | Command injection | Truyền `arguments` qua `ProcessStartInfo.ArgumentList`, **không** ghép chuỗi; `UseShellExecute = false`. |
 | Đọc file tuỳ ý qua `wf_analyze_form` | Áp cùng `PathGuard`. |
 | Screenshot lộ dữ liệu nhạy cảm | Ghi rõ trong README; env `WFVERIFY_DISABLE_SCREENSHOT=1` để tắt hẳn tool. |
-| Kill nhầm process | `wf_close_app` chỉ tác động lên process trong session hiện tại; không có tool kill theo tên. |
+| Kill nhầm process | `wf_close_app` chỉ tác động lên process trong session hiện tại, và **chỉ khi process đó do server khởi chạy**. App do người dùng tự mở (thường đã đăng nhập / trỏ vào một môi trường SQL cụ thể) sẽ bị từ chối — dùng `wf_detach_app`. Không có tool kill theo tên. |
 
 ---
 
@@ -846,7 +852,8 @@ và không có false positive trên các form còn lại.
 1. **Đa session?** Hiện thiết kế 1 app tại một thời điểm. Nếu cần test giao tiếp giữa 2 app, phải đổi
    `UiSession` thành `Dictionary<string, UiSession>` với `sessionId`.
    → *Khuyến nghị: giữ đơn session cho v1, nhưng thiết kế API đã sẵn sàng mở rộng.*
-2. **Ngôn ngữ output?** Message lỗi tiếng Anh thường được agent xử lý tốt hơn (khớp training data).
-   → *Khuyến nghị: `code` + `message` tiếng Anh, `hint` tiếng Việt.*
+2. **Ngôn ngữ output?** ✅ **ĐÃ CHỐT (ngược với khuyến nghị ban đầu):** `code` giữ tiếng Anh
+   (`ELEMENT_NOT_FOUND`, ...), còn `message` và `hint` đều tiếng Việt. Lý do: người đọc trực tiếp
+   output là người Việt, và thực tế agent xử lý tốt. Quy ước này đã áp dụng toàn bộ codebase — xem `CLAUDE.md`.
 3. **Có cần `wf_eval`** (chạy code C# tuỳ ý trong process đích qua injection)? Rất mạnh nhưng rủi ro cao.
    → *Khuyến nghị: KHÔNG — đã đưa vào out-of-scope §1.3.*

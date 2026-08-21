@@ -26,7 +26,7 @@
    - **Synchronization:** `wf_wait_for`, `wf_wait_idle`.
    - **Visual Verification:** `wf_screenshot` (chụp cửa sổ/control, downscale giữ tỉ lệ, nén dưới 4MB).
    - **Static Analysis:** `wf_analyze_form`, `wf_analyze_project`, `wf_list_rules`.
-4. **Bộ 14 Rule Phân tích Tĩnh Roslyn (`WF001`–`WF060`):**
+4. **Bộ 15 Rule Phân tích Tĩnh Roslyn (`WF001`–`WF060`):**
    - Phân tích cú pháp AST của cụm partial class (`Form.cs` + `Form.Designer.cs`).
    - Bắt chính xác các lỗi: Event handler mồ côi/gãy (`WF001`, `WF002`), đè tọa độ (`WF010`), vượt ClientSize (`WF011`), trùng/sai TabIndex (`WF020`, `WF021`, `WF022`), xung đột Dock & Anchor (`WF030`), thiếu AccessibleName (`WF040`), hardcoded font (`WF050`), thiếu AutoScaleMode (`WF051`), control mồ côi (`WF060`).
 5. **Bảo mật & Quản lý Tiến trình:**
@@ -118,6 +118,58 @@ Thêm vào `cline_mcp_settings.json` hoặc `roo_code_mcp_settings.json`:
     }
   }
 }
+```
+
+---
+
+## ⚠️ Ràng buộc Môi trường (đọc trước khi dùng)
+
+UI Automation không phải là API chạy ở đâu cũng được. Những ràng buộc dưới đây là **cứng**, không có cách lách:
+
+| Ràng buộc | Chi tiết |
+| :--- | :--- |
+| **Interactive desktop session** | Cần một phiên desktop **đang mở khoá**. Không chạy được qua SSH, Windows Service, hay CI agent chạy nền. Muốn dùng trong CI phải có RDP session giữ mở hoặc self-hosted runner ở chế độ interactive. |
+| **Màn hình khoá** | Khi Windows khoá màn hình, click sẽ thất bại và `wf_screenshot` trả ảnh đen. |
+| **Quyền** | Ứng dụng đích chạy elevated (Run as administrator) thì server **cũng phải** elevated, nếu không UIA bị UIPI chặn và mọi thao tác đều thất bại. |
+| **DPI** | Server đã bật per-monitor DPI aware v2 qua `app.manifest`. Nếu build lại mà thiếu manifest, `BoundingRectangle` và ảnh chụp sẽ lệch trên máy scale 125/150%. |
+| **Bitness** | Server build x64. Attach ứng dụng 32-bit vẫn chạy qua UIA3 (cross-bitness). |
+| **Control third-party** | DevExpress / Telerik / Infragistics vẽ custom chỉ hỗ trợ **best-effort** qua `LegacyIAccessible`. Không cam kết. WPF / WinUI / MAUI nằm ngoài phạm vi. |
+
+---
+
+## 🔒 Lưu ý Bảo mật
+
+- **Ảnh chụp màn hình có thể chứa dữ liệu nhạy cảm.** `wf_screenshot` chụp nguyên cửa sổ ứng dụng — bao gồm dữ liệu khách hàng, số liệu tài chính, thông tin đăng nhập đang hiển thị — rồi gửi thẳng cho model. Nếu không chấp nhận được, đặt biến môi trường `WFVERIFY_DISABLE_SCREENSHOT=1` để vô hiệu hoá hẳn tool này.
+- **`WFVERIFY_ALLOWED_ROOTS` là hàng rào duy nhất** cho `wf_launch_app`, `wf_analyze_form`, `wf_analyze_project`. Đặt càng hẹp càng tốt; bỏ trống thì mặc định là thư mục làm việc của server. Đường dẫn ngoài whitelist bị chặn với `PATH_DENIED`.
+- **Server không giết ứng dụng nó không khởi chạy.** Với app phải đăng nhập / chọn SQL thủ công, dùng `wf_attach_app` rồi kết thúc bằng `wf_detach_app`. `wf_close_app` sẽ **từ chối** nếu tiến trình không do server khởi chạy.
+- Không truyền mật khẩu thật qua prompt. Dùng `environment` của `wf_launch_app` hoặc file config cục bộ.
+
+---
+
+## 🧯 Xử lý sự cố (Troubleshooting)
+
+**Mọi tool đều trả `TIMEOUT`, kể cả `wf_list_windows`**
+Thường do **một cửa sổ treo của ứng dụng khác** trên cùng desktop (hay gặp nhất: app UWP bị Windows suspend — Notes, To Do, Settings). Bản 1.2.0 đã sửa: server liệt kê cửa sổ theo PID qua Win32 thay vì duyệt toàn bộ desktop. Nếu vẫn gặp trên bản cũ, kiểm tra bằng:
+```powershell
+Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and -not $_.Responding } | Select-Object Id,ProcessName
+```
+
+**`TIMEOUT` kèm "lần thứ 2 liên tiếp — session có thể đã hỏng"**
+Công việc trước đó vẫn đang chiếm luồng STA. Gọi `wf_close_app` (hoặc `wf_detach_app`) rồi launch/attach lại. Timeout chỉ bỏ *chờ*, không huỷ được công việc UIA đang chạy.
+
+**`ELEMENT_NOT_FOUND` dù control hiển thị rõ ràng**
+Đọc `candidates` trong envelope lỗi — server đã tính sẵn 10 ứng viên gần nhất. Nếu control không có `Name` lẫn `AutomationId`, chạy `wf_analyze_form` và xem rule `WF040`: nó chỉ đúng chỗ cần đặt `AccessibleName` trong code Designer.
+
+**Thao tác không có tác dụng nhưng tool báo thành công**
+Kiểm tra `warnings` trong kết quả. Nếu một `MessageBox` vừa bật lên, server trả cảnh báo kèm nội dung dialog — phải gọi `wf_dialog_respond` trước khi thao tác tiếp.
+
+**Client báo "server disconnected" hoặc `Invalid Base64 string`**
+Có thứ gì đó ghi vào stdout ngoài JSON-RPC. Không bao giờ chạy server bằng `dotnet run` (MSBuild in ra stdout) — luôn dùng `dist/WinFormsVerifier.McpServer.exe`. Test `ProtocolSmokeTests` bắt đúng loại lỗi này.
+
+**Sửa code server xong mà hành vi không đổi**
+MCP client vẫn đang chạy binary cũ. Publish lại vào `dist/` rồi reload client:
+```bash
+dotnet publish src/WinFormsVerifier.McpServer -c Release -r win-x64 --self-contained false -o dist
 ```
 
 ---

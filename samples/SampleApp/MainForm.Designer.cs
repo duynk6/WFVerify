@@ -91,6 +91,7 @@ partial class MainForm
         this.menuOrders.Name = "menuOrders";
         this.menuOrders.Size = new System.Drawing.Size(126, 22);
         this.menuOrders.Text = "Đơn hàng";
+        this.menuOrders.Click += new System.EventHandler(this.menuOrders_Click);
 
         // menuExit
         this.menuExit.Name = "menuExit";

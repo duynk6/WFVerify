@@ -4,6 +4,32 @@ Tất cả các thay đổi, bổ sung và quá trình triển khai dự án **W
 
 ---
 
+## [1.2.0] - 2026-08-21
+
+### 🐞 Một cửa sổ treo của ứng dụng KHÁC làm chết toàn bộ server (nghiêm trọng)
+
+- **Triệu chứng:** mọi tool `wf_*` trả `TIMEOUT`, kể cả `wf_list_windows`. Xảy ra đột ngột trên máy vừa chạy tốt vài phút trước.
+- **Đo được:** `desktop.FindAllChildren()` mất **60.149 ms** và trả về 12 con; `GetAllTopLevelWindows` sau đó vẫn chưa xong trong 30s còn lại. Trên máy lúc đó có 3 tiến trình UWP bị Windows suspend (`Microsoft.Notes`, `Todo`, `SystemSettings`) với `Responding = False`.
+- **Nguyên nhân:** `UiSession.ResolveWindow`, `wf_list_windows` và `wf_launch_app` đều đi qua `Application.GetAllTopLevelWindows` / `GetMainWindow` của FlaUI — các hàm này duyệt con của **desktop**, tức chạm vào cửa sổ của mọi ứng dụng đang chạy. Chỉ cần một cửa sổ không phản hồi là cả server nghẽn, rồi poison detection báo session hỏng.
+- **Sửa:** thêm `NativeWindows.GetProcessWindows(pid)` — `EnumWindows` lọc theo PID rồi mới `Automation.FromHandle`. Chỉ chạm cửa sổ của process đích. `GetMainWindow` chỉ còn là phương án cuối khi Win32 không thấy cửa sổ nào.
+- **Kiểm chứng:** `LiveUiWorkflowTests` fail trước khi sửa và pass sau khi sửa, **trong khi 3 cửa sổ treo vẫn còn nguyên trên desktop**.
+
+### 🧪 Kiểm thử — lấp các khoảng trống theo `plan.md`
+
+- **`ProtocolSmokeTests` (mới, §13.2):** nói chuyện JSON-RPC thật với exe đã publish qua stdio — `initialize` → `tools/list` → `tools/call wf_ping`; kiểm tra mọi tool có prefix `wf_` và có `[Description]`. Không cần desktop session. Đã xác nhận test **fail đúng** khi cố tình thêm một `Console.WriteLine` vào `Program.cs` (báo "stdout KHÔNG phải JSON-RPC hợp lệ"). Hỗ trợ biến `WFVERIFY_SERVER_EXE` để CI trỏ tới thư mục publish riêng.
+- **`InteractionCoverageTests` (mới):** phủ 6 tool trước đây **không có fixture nào để chạy thật** — `toggle`, `select`, `expand`, `send_keys`, `focus`, `scroll_into_view`.
+- **`CatalogForm` (fixture mới):** `TreeView` (expand + select node con), `ListBox` 60 mục (select theo tên, scroll_into_view mục cuối), `CheckBox`, `DateTimePicker`, `TextBox`. Mở từ menu `File > Đơn hàng` — trước đây là menu item chết, chưa nối handler.
+- Tổng: **27 test pass** (17 unit + 10 integration).
+
+### 📚 Tài liệu
+
+- **`plan.md` §8.4 đính chính:** code mẫu và ghi chú vẫn đang dạy `new ImageContentBlock { Data = bytes }` — đúng cái lỗi đã gây ra `Invalid Base64 string`. Đã đổi sang `ImageContentBlock.FromBytes()` kèm cảnh báo.
+- `plan.md` §6.2/§11 cập nhật `wf_detach_app`, `environment` của `wf_launch_app`, `waitForWindowMs` của `wf_attach_app`, và hành vi mới của `wf_close_app`. §16 quyết định #2 (ngôn ngữ output) ghi nhận là đã chốt ngược với khuyến nghị ban đầu.
+- **README** bổ sung theo GĐ 5: ràng buộc môi trường (interactive session, màn khoá, elevated/UIPI, DPI, bitness, control third-party), lưu ý bảo mật (ảnh chụp lộ dữ liệu + `WFVERIFY_DISABLE_SCREENSHOT`, phạm vi `WFVERIFY_ALLOWED_ROOTS`), và mục xử lý sự cố.
+- Sửa số rule: thực tế có **15** rule `WF001`–`WF060`, README và `CLAUDE.md` ghi nhầm 14.
+
+---
+
 ## [1.1.0] - 2026-08-21
 
 ### ✨ Hỗ trợ ứng dụng cần đăng nhập / chọn SQL thủ công

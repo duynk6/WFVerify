@@ -79,6 +79,36 @@ public sealed class UiSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Cửa sổ cấp cao nhất của process đích, lấy qua Win32 rồi mới đổi sang UIA element.
+    /// KHÔNG dùng App.GetAllTopLevelWindows: hàm đó duyệt con của desktop nên chạm vào cửa sổ
+    /// của mọi ứng dụng khác — một cửa sổ treo trên máy là đủ làm mọi tool wf_* timeout.
+    /// </summary>
+    public List<Window> GetProcessWindows()
+    {
+        EnsureAlive();
+
+        var windows = new List<Window>();
+        foreach (var native in NativeWindows.GetProcessWindows(App!.ProcessId))
+        {
+            try
+            {
+                var element = Automation.FromHandle(native.Hwnd);
+                var window = element?.AsWindow();
+                if (window != null)
+                {
+                    windows.Add(window);
+                }
+            }
+            catch
+            {
+                // cửa sổ vừa đóng giữa chừng — bỏ qua
+            }
+        }
+
+        return windows;
+    }
+
     public Window ResolveWindow(string? selector = null)
     {
         EnsureAlive();
@@ -86,7 +116,7 @@ public sealed class UiSession : IDisposable
         // 1. If selector is provided, look for matching window
         if (!string.IsNullOrWhiteSpace(selector))
         {
-            var windows = App!.GetAllTopLevelWindows(Automation);
+            var windows = GetProcessWindows();
             var matched = FindWindowBySelector(windows, selector);
             if (matched != null)
             {
@@ -100,7 +130,7 @@ public sealed class UiSession : IDisposable
         }
 
         // 2. If selector is null, check for any active modal dialog first!
-        var topWindows = App!.GetAllTopLevelWindows(Automation);
+        var topWindows = GetProcessWindows();
         var modal = topWindows.FirstOrDefault(w => w.IsModal || w.ModalWindows.Length > 0);
         if (modal != null)
         {
@@ -112,21 +142,28 @@ public sealed class UiSession : IDisposable
         }
 
         // 3. Fallback to main window
-        try
+        // Ưu tiên cửa sổ lấy qua Win32 (rẻ). GetMainWindow của FlaUI đi qua desktop nên chỉ
+        // dùng khi Win32 không thấy cửa sổ nào.
+        var first = topWindows.FirstOrDefault(w => !string.IsNullOrWhiteSpace(w.SafeName()))
+                    ?? topWindows.FirstOrDefault();
+
+        if (first == null)
         {
-            var main = App.GetMainWindow(Automation);
-            if (main != null)
+            try
             {
-                CachedMainWindow = main;
-                return main;
+                var main = App.GetMainWindow(Automation);
+                if (main != null)
+                {
+                    CachedMainWindow = main;
+                    return main;
+                }
+            }
+            catch
+            {
+                // bỏ qua, rơi xuống lỗi bên dưới
             }
         }
-        catch
-        {
-            // Fallback to first available top-level window
-        }
 
-        var first = topWindows.FirstOrDefault();
         if (first != null)
         {
             CachedMainWindow = first;

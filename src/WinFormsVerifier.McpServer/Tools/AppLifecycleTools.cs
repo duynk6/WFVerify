@@ -89,7 +89,14 @@ public static class AppLifecycleTools
                 var mainWin = Retry.WhileNull(
                     () =>
                     {
-                        try { return app.GetMainWindow(session.Automation); }
+                        try
+                        {
+                            // Không gọi GetMainWindow (duyệt desktop, treo nếu máy có cửa sổ hỏng).
+                            var native = NativeWindows.GetProcessWindows(app.ProcessId)
+                                .FirstOrDefault(w => !string.IsNullOrWhiteSpace(w.Title));
+                            if (native == null) return null;
+                            return session.Automation.FromHandle(native.Hwnd)?.AsWindow();
+                        }
                         catch { return null; }
                     },
                     TimeSpan.FromMilliseconds(waitForWindowMs),
@@ -312,7 +319,7 @@ public static class AppLifecycleTools
 
             var windowsList = await session.RunAsync(() =>
             {
-                var topWindows = session.App!.GetAllTopLevelWindows(session.Automation);
+                var topWindows = session.GetProcessWindows();
                 var list = new List<object>();
 
                 foreach (var win in topWindows)

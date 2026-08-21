@@ -58,6 +58,44 @@ public static class NativeWindows
     }
 
     /// <summary>
+    /// Cửa sổ cấp cao nhất thuộc đúng một process.
+    /// Dùng thay cho <c>Application.GetAllTopLevelWindows(automation)</c> của FlaUI: hàm đó duyệt
+    /// con của desktop qua UIA, tức chạm vào cửa sổ của MỌI ứng dụng đang chạy. Chỉ cần một cửa sổ
+    /// treo (app UWP bị suspend, ứng dụng không phản hồi) là lời gọi đứng hàng chục giây — đã đo
+    /// được 60s cho một lần <c>FindAllChildren()</c> trên desktop. EnumWindows + lọc theo PID chỉ
+    /// đọc dữ liệu cửa sổ, không gửi message chờ phản hồi sang process khác.
+    /// </summary>
+    public static List<TopLevelWindow> GetProcessWindows(int processId, bool visibleOnly = true)
+    {
+        var result = new List<TopLevelWindow>();
+
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var pid);
+            if ((int)pid != processId)
+            {
+                return true;
+            }
+
+            if (visibleOnly && !IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            var sbTitle = new StringBuilder(512);
+            GetWindowText(hwnd, sbTitle, sbTitle.Capacity);
+
+            var sbClass = new StringBuilder(256);
+            GetClassName(hwnd, sbClass, sbClass.Capacity);
+
+            result.Add(new TopLevelWindow(hwnd, processId, sbTitle.ToString(), sbClass.ToString()));
+            return true;
+        }, IntPtr.Zero);
+
+        return result;
+    }
+
+    /// <summary>
     /// Các process có cửa sổ hiển thị mà tiêu đề chứa <paramref name="titlePart"/>.
     /// Trả về map processId -> tiêu đề khớp đầu tiên.
     /// </summary>
