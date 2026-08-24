@@ -102,14 +102,14 @@ public sealed class ElementLocator
         // 2. Exact AutomationId
         if (!string.IsNullOrEmpty(segment.Id))
         {
-            var byId = scope.FindFirstDescendant(cf => cf.ByAutomationId(segment.Id));
+            var byId = FirstPreferringVisible(scope.FindAllDescendants(cf => cf.ByAutomationId(segment.Id)));
             if (byId != null) return byId;
         }
 
         // 3. Exact Name
         if (!string.IsNullOrEmpty(segment.Name))
         {
-            var byName = scope.FindFirstDescendant(cf => cf.ByName(segment.Name));
+            var byName = FirstPreferringVisible(scope.FindAllDescendants(cf => cf.ByName(segment.Name)));
             if (byName != null) return byName;
         }
 
@@ -167,6 +167,24 @@ public sealed class ElementLocator
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Nhiều control trong cùng form có thể trùng AutomationId/Name (4 tab của một form dùng chung
+    /// tên 'fg', 'txtMaHang'...). Ưu tiên control đang HIỂN THỊ để 'id:fg' không trả về grid của tab
+    /// đang ẩn. Muốn nhắm đúng tab cụ thể thì dùng selector phân cấp: 'id:tabTheoDoi > id:fg'.
+    /// </summary>
+    private static AutomationElement? FirstPreferringVisible(AutomationElement[] matches)
+    {
+        if (matches.Length == 0) return null;
+        if (matches.Length == 1) return matches[0];
+
+        foreach (var match in matches)
+        {
+            if (!match.SafeIsOffscreen()) return match;
+        }
+
+        return matches[0];
     }
 
     private List<AutomationElement> FindAllSegmentMatches(AutomationElement scope, SelectorSegment segment, int limit)

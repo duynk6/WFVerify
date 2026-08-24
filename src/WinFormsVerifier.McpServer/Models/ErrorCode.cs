@@ -11,5 +11,6 @@ public static class ErrorCode
     public const string Timeout = "TIMEOUT";
     public const string BlockedByModal = "BLOCKED_BY_MODAL";
     public const string PathDenied = "PATH_DENIED";
+    public const string ReadOnlyMode = "READONLY_MODE";
     public const string Internal = "INTERNAL";
 }

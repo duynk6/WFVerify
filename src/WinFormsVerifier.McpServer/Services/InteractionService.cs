@@ -29,6 +29,12 @@ public sealed class InteractionService
     public InteractionResult Invoke(AutomationElement element)
     {
         CheckModalBlock();
+        ReadOnlyGuard.EnsureInvokeAllowed(element.SafeLabel());
+
+        // Trạng thái TRƯỚC khi click: nếu control có trạng thái đọc được (Toggle/SelectionItem)
+        // thì sau khi click phải đọc lại và so sánh, không báo "đã click" một cách vô điều kiện.
+        var preToggle = SafeToggleState(element);
+        var preSelected = SafeIsSelected(element);
 
         var success = false;
         var p = element.Patterns;
@@ -114,12 +120,68 @@ public sealed class InteractionService
                 details: new { Patterns = patterns });
         }
 
-        return PostAction($"Đã click/kích hoạt '{element.SafeLabel()}'.");
+        var result = PostAction($"Đã click/kích hoạt '{element.SafeLabel()}'.");
+        VerifyInvokeEffect(element, preToggle, preSelected, result);
+        return result;
+    }
+
+    /// <summary>
+    /// Xác minh hậu điều kiện cho Invoke. Chỉ áp dụng khi control CÓ trạng thái đọc được —
+    /// nút bấm thường không có hậu điều kiện quan sát được ở phía UIA.
+    /// </summary>
+    private static void VerifyInvokeEffect(AutomationElement element, ToggleState? preToggle, bool? preSelected, InteractionResult result)
+    {
+        if (preToggle.HasValue)
+        {
+            var after = SafeToggleState(element);
+            if (after.HasValue && after.Value == preToggle.Value)
+            {
+                result.Warnings.Add(
+                    $"Đã gọi Invoke nhưng ToggleState của '{element.SafeLabel()}' vẫn là '{after.Value}' — thao tác có thể chưa có tác dụng.");
+            }
+            return;
+        }
+
+        if (preSelected == false && SafeIsSelected(element) == false)
+        {
+            result.Warnings.Add(
+                $"Đã gọi Invoke nhưng '{element.SafeLabel()}' vẫn chưa được chọn (IsSelected=false) — thao tác có thể chưa có tác dụng.");
+        }
+    }
+
+    private static ToggleState? SafeToggleState(AutomationElement element)
+    {
+        try
+        {
+            return element.Patterns.Toggle.IsSupported ? element.Patterns.Toggle.Pattern.ToggleState.Value : null;
+        }
+        catch { return null; }
+    }
+
+    private static bool? SafeIsSelected(AutomationElement element)
+    {
+        try
+        {
+            return element.Patterns.SelectionItem.IsSupported ? element.Patterns.SelectionItem.Pattern.IsSelected.Value : null;
+        }
+        catch { return null; }
+    }
+
+    private static bool TryPhysicalClick(AutomationElement element)
+    {
+        try
+        {
+            element.Click();
+            Thread.Sleep(150);
+            return true;
+        }
+        catch { return false; }
     }
 
     public InteractionResult SetValue(AutomationElement element, string value, string mode = "replace", bool verify = true)
     {
         CheckModalBlock();
+        ReadOnlyGuard.EnsureWriteAllowed("wf_set_value", element.SafeLabel());
 
         var isPassword = element.SafeIsPassword();
 
@@ -243,26 +305,57 @@ public sealed class InteractionService
             var current = element.Patterns.Toggle.Pattern.ToggleState.Value;
             var target = state.ToLowerInvariant();
 
-            if (target == "on" && current != ToggleState.On)
+            var wanted = target switch
             {
-                element.Patterns.Toggle.Pattern.Toggle();
-            }
-            else if (target == "off" && current != ToggleState.Off)
+                "on" => ToggleState.On,
+                "off" => ToggleState.Off,
+                _ => current == ToggleState.On ? ToggleState.Off : ToggleState.On
+            };
+
+            if (current != wanted)
             {
-                element.Patterns.Toggle.Pattern.Toggle();
-            }
-            else if (target == "toggle")
-            {
-                element.Patterns.Toggle.Pattern.Toggle();
+                try { element.Patterns.Toggle.Pattern.Toggle(); }
+                catch { /* xác minh bên dưới sẽ quyết định có fallback không */ }
+                Thread.Sleep(100);
             }
 
-            return PostAction($"Đã chuyển trạng thái toggle của '{element.SafeLabel()}' sang '{element.Patterns.Toggle.Pattern.ToggleState.Value}'.");
+            // Xác minh hậu điều kiện: TogglePattern.Toggle() có thể trả về mà trạng thái không đổi
+            // (control bị disable logic, handler chặn). Đọc lại rồi mới báo kết quả.
+            var after = SafeToggleState(element);
+            if (after != wanted)
+            {
+                TryPhysicalClick(element);
+                after = SafeToggleState(element);
+            }
+
+            var result = PostAction($"Đã chuyển trạng thái toggle của '{element.SafeLabel()}' sang '{after}'.");
+            if (after != wanted)
+            {
+                result.Warnings.Add(
+                    $"Đã gọi Toggle nhưng trạng thái của '{element.SafeLabel()}' vẫn là '{after}' (mong đợi '{wanted}') — kể cả sau khi click vật lý.");
+            }
+
+            return result;
         }
 
         if (element.Patterns.SelectionItem.IsSupported)
         {
-            element.Patterns.SelectionItem.Pattern.Select();
-            return PostAction($"Đã chọn '{element.SafeLabel()}'.");
+            try { element.Patterns.SelectionItem.Pattern.Select(); }
+            catch { /* xác minh bên dưới */ }
+            Thread.Sleep(100);
+
+            if (SafeIsSelected(element) == false)
+            {
+                TryPhysicalClick(element);
+            }
+
+            var result = PostAction($"Đã chọn '{element.SafeLabel()}'.");
+            if (SafeIsSelected(element) == false)
+            {
+                result.Warnings.Add($"Đã gọi Select nhưng '{element.SafeLabel()}' vẫn báo IsSelected=false.");
+            }
+
+            return result;
         }
 
         return Invoke(element);
@@ -272,14 +365,38 @@ public sealed class InteractionService
     {
         CheckModalBlock();
 
-        // If this element itself is a selectable item
-        if (element.Patterns.SelectionItem.IsSupported)
+        var containerLabel = element.SafeLabel();
+
+        // Bản thân element đã là một mục chọn được (ListItem / TabItem) và không có tiêu chí con.
+        if (element.Patterns.SelectionItem.IsSupported && string.IsNullOrEmpty(item) && !index.HasValue)
         {
-            element.Patterns.SelectionItem.Pattern.Select();
-            return PostAction($"Đã chọn mục '{element.SafeLabel()}'.");
+            try { element.Patterns.SelectionItem.Pattern.Select(); }
+            catch { /* xác minh bên dưới quyết định fallback */ }
+            Thread.Sleep(100);
+
+            if (SafeIsSelected(element) == false)
+            {
+                TryPhysicalClick(element);
+            }
+
+            var selfResult = PostAction($"Đã chọn mục '{containerLabel}'.");
+            if (SafeIsSelected(element) == false)
+            {
+                selfResult.Warnings.Add(
+                    $"Đã gọi Select nhưng '{containerLabel}' vẫn báo IsSelected=false — selection có thể không thay đổi.");
+            }
+
+            return selfResult;
         }
 
-        // If it is a container (ComboBox / ListBox / TabControl)
+        if (string.IsNullOrEmpty(item) && !index.HasValue)
+        {
+            throw new ToolException(
+                ErrorCode.Internal,
+                $"Cần cung cấp ít nhất tham số 'item' hoặc 'index' để chọn mục trong '{containerLabel}'.");
+        }
+
+        // Container (ComboBox / ListBox / TabControl)
         if (element.Patterns.ExpandCollapse.IsSupported && element.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value != ExpandCollapseState.Expanded)
         {
             try
@@ -290,45 +407,203 @@ public sealed class InteractionService
             catch { /* continue */ }
         }
 
-        var children = element.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem).Or(cf.ByControlType(ControlType.TabItem)));
+        var children = element
+            .FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem).Or(cf.ByControlType(ControlType.TabItem)))
+            .ToList();
 
-        if (index.HasValue && index.Value >= 0 && index.Value < children.Length)
+        var viaPopup = false;
+        if (children.Count == 0)
         {
-            var target = children[index.Value];
-            if (target.Patterns.SelectionItem.IsSupported)
+            // Combo của DevExpress / DotNetBar lộ ra là Pane: không Selection, không ExpandCollapse,
+            // và dropdown là POPUP WINDOW riêng của cùng process nên KHÔNG nằm trong cây con của form.
+            // Bung dropdown bằng click vật lý rồi tìm item trong các cửa sổ mới xuất hiện.
+            children = OpenDropdownAndCollectItems(element);
+            viaPopup = children.Count > 0;
+        }
+
+        if (children.Count == 0)
+        {
+            var patterns = ElementDto.DetectSupportedPatterns(element);
+            throw new ToolException(
+                ErrorCode.ElementNotFound,
+                $"Không tìm thấy mục nào trong '{containerLabel}' ({element.SafeControlTypeName()}): cây UIA không có ListItem/TabItem và click bung dropdown cũng không tạo popup nào.",
+                "Nếu đây là combo của thư viện bên thứ ba, thử wf_focus rồi wf_send_keys ('{DOWN}', '{ENTER}') " +
+                "hoặc wf_set_value nếu control cho nhập text trực tiếp.",
+                details: new { Patterns = patterns });
+        }
+
+        var names = children.Select(c => c.SafeName()).ToList();
+
+        try
+        {
+            AutomationElement target;
+            string expectedName;
+
+            if (index.HasValue)
             {
-                target.Patterns.SelectionItem.Pattern.Select();
+                if (index.Value < 0 || index.Value >= children.Count)
+                {
+                    throw new ToolException(
+                        ErrorCode.ElementNotFound,
+                        $"index {index.Value} nằm ngoài phạm vi: danh sách '{containerLabel}' có {children.Count} mục" +
+                        (children.Count > 0 ? $" (index hợp lệ 0..{children.Count - 1})." : "."),
+                        children.Count > 0
+                            ? $"Các mục hiện có: [{string.Join(", ", names)}]."
+                            : "Danh sách đang rỗng — có thể dữ liệu chưa được nạp, hãy chờ bằng wf_wait_idle rồi thử lại.");
+                }
+
+                target = children[index.Value];
+                expectedName = names[index.Value];
             }
             else
             {
-                target.Click();
-            }
-            return PostAction($"Đã chọn index {index.Value} ('{target.SafeLabel()}') trong '{element.SafeLabel()}'.");
-        }
+                var match = ItemMatcher.Match(names, item!);
+                switch (match.Kind)
+                {
+                    case ItemMatchKind.Ambiguous:
+                        var ambiguous = match.AmbiguousIndexes.Select(i => $"[{i}] {names[i]}").ToList();
+                        throw new ToolException(
+                            ErrorCode.Ambiguous,
+                            $"Từ khoá '{item}' khớp {ambiguous.Count} mục trong '{containerLabel}': [{string.Join(", ", ambiguous)}].",
+                            "Truyền đúng tên đầy đủ của mục (khớp chính xác được ưu tiên) hoặc dùng tham số 'index'.",
+                            details: new { Matches = ambiguous });
 
-        if (!string.IsNullOrEmpty(item))
+                    case ItemMatchKind.NotFound:
+                        throw new ToolException(
+                            ErrorCode.ElementNotFound,
+                            $"Không tìm thấy mục '{item}' trong danh sách '{containerLabel}'.",
+                            $"Danh sách các mục có sẵn: [{string.Join(", ", names)}]");
+                }
+
+                target = children[match.Index];
+                expectedName = names[match.Index];
+            }
+
+            return SelectTargetWithVerify(element, target, expectedName, containerLabel, viaPopup);
+        }
+        catch
         {
-            var matched = children.FirstOrDefault(c => c.SafeName().Contains(item, StringComparison.OrdinalIgnoreCase));
-            if (matched != null)
+            // Không để dropdown vừa bung nằm lại chắn màn hình khi lời gọi thất bại.
+            if (viaPopup)
             {
-                if (matched.Patterns.SelectionItem.IsSupported)
+                try { Keyboard.Type(VirtualKeyShort.ESCAPE); } catch { /* ignore */ }
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Bung dropdown bằng click vật lý rồi thu thập item trong các cửa sổ MỚI của chính process đích.
+    /// Chỉ duyệt cửa sổ theo PID (EnumWindows + lọc), không đi qua desktop của UIA.
+    /// </summary>
+    private List<AutomationElement> OpenDropdownAndCollectItems(AutomationElement element)
+    {
+        var pid = _session.ProcessId;
+        if (pid == null) return new List<AutomationElement>();
+
+        var before = ProcessWindowHandles(pid.Value);
+        if (!TryPhysicalClick(element)) return new List<AutomationElement>();
+
+        var deadline = DateTime.UtcNow.AddMilliseconds(1500);
+        do
+        {
+            foreach (var hwnd in ProcessWindowHandles(pid.Value).Except(before))
+            {
+                try
                 {
-                    matched.Patterns.SelectionItem.Pattern.Select();
+                    var popup = _session.Automation.FromHandle(hwnd);
+                    if (popup == null) continue;
+
+                    var items = popup.FindAllDescendants(cf =>
+                        cf.ByControlType(ControlType.ListItem)
+                          .Or(cf.ByControlType(ControlType.DataItem))
+                          .Or(cf.ByControlType(ControlType.TreeItem)));
+
+                    if (items.Length > 0) return items.ToList();
                 }
-                else
-                {
-                    matched.Click();
-                }
-                return PostAction($"Đã chọn mục '{matched.SafeLabel()}' trong '{element.SafeLabel()}'.");
+                catch { /* cửa sổ vừa đóng hoặc không truy cập được */ }
             }
 
-            throw new ToolException(
-                ErrorCode.ElementNotFound,
-                $"Không tìm thấy mục '{item}' trong danh sách '{element.SafeLabel()}'.",
-                $"Danh sách các mục có sẵn: [{string.Join(", ", children.Select(c => c.SafeLabel()))}]");
+            Thread.Sleep(100);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        return new List<AutomationElement>();
+    }
+
+    private static HashSet<IntPtr> ProcessWindowHandles(int processId)
+    {
+        return NativeWindows.GetProcessWindows(processId).Select(w => w.Hwnd).ToHashSet();
+    }
+
+    private InteractionResult SelectTargetWithVerify(
+        AutomationElement container,
+        AutomationElement target,
+        string expectedName,
+        string containerLabel,
+        bool viaPopup)
+    {
+        var selected = false;
+        if (target.Patterns.SelectionItem.IsSupported)
+        {
+            try
+            {
+                target.Patterns.SelectionItem.Pattern.Select();
+                selected = true;
+            }
+            catch { /* rơi xuống click vật lý */ }
         }
 
-        throw new ToolException(ErrorCode.Internal, "Cần cung cấp ít nhất tham số 'item' hoặc 'index' để select.");
+        if (!selected)
+        {
+            TryPhysicalClick(target);
+        }
+
+        Thread.Sleep(120);
+
+        // Hậu điều kiện BẮT BUỘC: đọc lại selection của container. Trước đây tool báo
+        // "Đã chọn mục X" ngay sau khi gọi Select() mà không đọc lại -> test pass giả.
+        var (ok, actual) = VerifySelection(container, expectedName);
+        if (!ok)
+        {
+            TryPhysicalClick(target);
+            (ok, actual) = VerifySelection(container, expectedName);
+        }
+
+        var result = PostAction($"Đã chọn mục '{expectedName}' trong '{containerLabel}'{(viaPopup ? " (qua dropdown popup)" : "")}.");
+        if (!ok)
+        {
+            result.Warnings.Add(
+                $"Đã gọi Select nhưng selection của '{containerLabel}' không đổi thành '{expectedName}' " +
+                $"(đọc lại được: '{actual}') — kể cả sau khi click vật lý.");
+        }
+
+        return result;
+    }
+
+    private static (bool Ok, string? Actual) VerifySelection(AutomationElement container, string expectedName)
+    {
+        try
+        {
+            if (container.Patterns.Selection.IsSupported)
+            {
+                var selection = container.Patterns.Selection.Pattern.Selection.ValueOrDefault;
+                if (selection is { Length: > 0 })
+                {
+                    var selectedNames = selection.Select(s => s.SafeName()).ToList();
+                    var matched = selectedNames.Any(n => string.Equals(n?.Trim(), expectedName?.Trim(), StringComparison.OrdinalIgnoreCase));
+                    return (matched, string.Join(", ", selectedNames));
+                }
+            }
+        }
+        catch { /* rơi xuống đọc giá trị hiển thị */ }
+
+        var value = GetElementValue(container) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(expectedName)) return (true, value);
+
+        var ok = string.Equals(value.Trim(), expectedName.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                 value.Contains(expectedName.Trim(), StringComparison.OrdinalIgnoreCase);
+        return (ok, value);
     }
 
     public InteractionResult Expand(AutomationElement element, bool expand = true)
@@ -384,31 +659,17 @@ public sealed class InteractionService
 
     public InteractionResult GridRead(AutomationElement element, int startRow = 0, int maxRows = 50, int maxCols = 20)
     {
+        var grid = new GridAccessor(element);
         var sb = new StringBuilder();
-        int rowCount = 0;
-        int colCount = 0;
 
-        try
+        int endRow = Math.Min(grid.RowCount, Math.Max(0, startRow) + maxRows);
+        int colsToRead = Math.Min(grid.ColumnCount > 0 ? grid.ColumnCount : 20, maxCols);
+
+        sb.AppendLine($"Bảng: {grid.RowCount} dòng × {grid.ColumnCount} cột (Hiển thị từ dòng {startRow} đến {Math.Max(0, endRow - 1)}):");
+        if (grid.Headers.Count > 0)
         {
-            if (element.Patterns.Grid.IsSupported)
-            {
-                rowCount = element.Patterns.Grid.Pattern.RowCount.ValueOrDefault;
-                colCount = element.Patterns.Grid.Pattern.ColumnCount.ValueOrDefault;
-            }
+            sb.AppendLine("Cột   | " + string.Join(" | ", grid.Headers.Take(colsToRead).Select(h => h.PadRight(15))));
         }
-        catch { /* ignore */ }
-
-        var dgv = element.AsDataGridView();
-        var dgvRows = dgv?.Rows;
-        if (rowCount == 0 && dgvRows != null)
-        {
-            rowCount = dgvRows.Length;
-        }
-
-        int endRow = Math.Min(rowCount > 0 ? rowCount : (dgvRows?.Length ?? 0), startRow + maxRows);
-        int colsToRead = Math.Min(colCount > 0 ? colCount : 20, maxCols);
-
-        sb.AppendLine($"Bảng: {rowCount} dòng × {colCount} cột (Hiển thị từ dòng {startRow} đến {Math.Max(0, endRow - 1)}):");
         sb.AppendLine(new string('-', 60));
 
         for (int r = startRow; r < endRow; r++)
@@ -416,13 +677,7 @@ public sealed class InteractionService
             var cellValues = new List<string>();
             for (int c = 0; c < colsToRead; c++)
             {
-                string cellText = "";
-                var cell = GetGridCellElement(element, r, c);
-                if (cell != null)
-                {
-                    cellText = GetElementValue(cell) ?? cell.SafeName();
-                }
-                cellValues.Add(cellText.PadRight(15));
+                cellValues.Add(grid.GetCellText(r, c).PadRight(15));
             }
             sb.AppendLine($"Row {r:D2} | " + string.Join(" | ", cellValues));
         }
@@ -431,61 +686,267 @@ public sealed class InteractionService
         {
             Success = true,
             Message = sb.ToString(),
-            Data = new { TotalRows = rowCount, TotalCols = colCount, DisplayedRows = endRow - startRow }
+            Data = new
+            {
+                TotalRows = grid.RowCount,
+                TotalCols = grid.ColumnCount,
+                DisplayedRows = Math.Max(0, endRow - startRow),
+                Headers = grid.Headers
+            }
+        };
+    }
+
+    /// <summary>
+    /// Tìm dòng theo điều kiện trên một cột thay vì kéo cả bảng về rồi lọc phía agent.
+    /// </summary>
+    public InteractionResult GridFind(
+        AutomationElement element,
+        string column,
+        string value,
+        string op = "contains",
+        int maxMatches = 20,
+        int startRow = 0)
+    {
+        var grid = new GridAccessor(element);
+
+        var colIndex = grid.ResolveColumnIndex(column);
+        if (colIndex < 0)
+        {
+            throw new ToolException(
+                ErrorCode.ElementNotFound,
+                $"Không xác định được cột '{column}' trong bảng '{element.SafeLabel()}'.",
+                grid.Headers.Count > 0
+                    ? $"Các cột hiện có: [{string.Join(", ", grid.Headers)}]. Có thể truyền tên cột hoặc chỉ số 0-based."
+                    : "Bảng không lộ tên cột qua UIA — hãy truyền chỉ số cột 0-based.");
+        }
+
+        var comparison = op.Trim().ToLowerInvariant();
+        if (comparison is not ("contains" or "equals" or "startswith"))
+        {
+            throw new ToolException(
+                ErrorCode.Internal,
+                $"Toán tử so khớp '{op}' không hợp lệ.",
+                "Chỉ hỗ trợ 'contains', 'equals', 'startswith'.");
+        }
+
+        var matches = new List<object>();
+        var sb = new StringBuilder();
+        int scanned = 0;
+
+        for (int r = Math.Max(0, startRow); r < grid.RowCount && matches.Count < maxMatches; r++)
+        {
+            scanned++;
+            var cellText = grid.GetCellText(r, colIndex);
+
+            var hit = comparison switch
+            {
+                "equals" => string.Equals(cellText.Trim(), value.Trim(), StringComparison.OrdinalIgnoreCase),
+                "startswith" => cellText.TrimStart().StartsWith(value.Trim(), StringComparison.OrdinalIgnoreCase),
+                _ => cellText.Contains(value, StringComparison.OrdinalIgnoreCase)
+            };
+
+            if (!hit) continue;
+
+            var rowCells = new List<string>();
+            for (int c = 0; c < grid.ColumnCount; c++)
+            {
+                rowCells.Add(grid.GetCellText(r, c));
+            }
+
+            matches.Add(new { RowIndex = r, Cells = rowCells });
+            sb.AppendLine($"Row {r:D2} | " + string.Join(" | ", rowCells.Select(x => x.PadRight(15))));
+        }
+
+        var header = $"Tìm '{value}' ({comparison}) trên cột '{(grid.Headers.Count > colIndex ? grid.Headers[colIndex] : colIndex.ToString())}': " +
+                     $"{matches.Count} dòng khớp / {scanned} dòng đã quét (tổng {grid.RowCount} dòng).";
+
+        return new InteractionResult
+        {
+            Success = true,
+            Message = matches.Count > 0 ? header + Environment.NewLine + sb : header,
+            Data = new
+            {
+                ColumnIndex = colIndex,
+                TotalRows = grid.RowCount,
+                ScannedRows = scanned,
+                MatchCount = matches.Count,
+                Headers = grid.Headers,
+                Matches = matches
+            }
         };
     }
 
     public InteractionResult GridSetCell(AutomationElement element, int row, int col, string value)
     {
         CheckModalBlock();
+        ReadOnlyGuard.EnsureWriteAllowed("wf_grid_set_cell", $"{element.SafeLabel()}[{row},{col}]");
 
-        var cell = GetGridCellElement(element, row, col);
+        var grid = new GridAccessor(element);
+        var cell = grid.GetCell(row, col);
         if (cell == null)
         {
-            throw new ToolException(ErrorCode.ElementNotFound, $"Không tìm thấy ô tại dòng {row}, cột {col}.");
+            throw new ToolException(
+                ErrorCode.ElementNotFound,
+                $"Không tìm thấy ô tại dòng {row}, cột {col}.",
+                $"Bảng đang có {grid.RowCount} dòng × {grid.ColumnCount} cột.");
         }
 
         return SetValue(cell, value);
     }
 
-    private static AutomationElement? GetGridCellElement(AutomationElement gridElement, int row, int col)
+    /// <summary>
+    /// Bọc một bảng và CACHE row/cell. Trước đây mỗi ô gọi lại AsDataGridView() + dựng lại
+    /// mảng Rows: đọc 50×20 tốn 1000 vòng UIA thừa. Cũng suy ra số cột từ dòng đầu tiên khi
+    /// control không hỗ trợ GridPattern (C1FlexGrid luôn trả ColumnCount = 0).
+    /// </summary>
+    private sealed class GridAccessor
     {
-        try
+        private readonly AutomationElement _grid;
+        private readonly DataGridViewRow[] _rows;
+        private readonly Dictionary<int, AutomationElement[]> _cellCache = new();
+        private readonly AutomationElement[]? _fallbackRows;
+
+        public int RowCount { get; }
+        public int ColumnCount { get; }
+        public IReadOnlyList<string> Headers { get; }
+
+        public GridAccessor(AutomationElement grid)
         {
-            if (gridElement.Patterns.Grid.IsSupported)
-            {
-                try
-                {
-                    var item = gridElement.Patterns.Grid.Pattern.GetItem(row, col);
-                    if (item != null) return item;
-                }
-                catch { /* WinForms DataGridView throws NotImplementedException */ }
-            }
+            _grid = grid;
 
-            var dgv = gridElement.AsDataGridView();
-            if (dgv != null && dgv.Rows.Length > row)
+            int patternRows = 0, patternCols = 0;
+            try
             {
-                var r = dgv.Rows[row];
-                if (r.Cells.Length > col)
+                if (grid.Patterns.Grid.IsSupported)
                 {
-                    return r.Cells[col];
+                    patternRows = grid.Patterns.Grid.Pattern.RowCount.ValueOrDefault;
+                    patternCols = grid.Patterns.Grid.Pattern.ColumnCount.ValueOrDefault;
                 }
             }
+            catch { /* ignore */ }
 
-            // Fallback: child search
-            var rows = gridElement.FindAllChildren(cf => cf.ByControlType(ControlType.DataItem).Or(cf.ByControlType(ControlType.Custom)));
-            if (rows.Length > row)
-            {
-                var cells = rows[row].FindAllChildren();
-                if (cells.Length > col)
-                {
-                    return cells[col];
-                }
-            }
+            _rows = SafeRows(grid);
+            _fallbackRows = _rows.Length == 0
+                ? grid.FindAllChildren(cf => cf.ByControlType(ControlType.DataItem).Or(cf.ByControlType(ControlType.Custom)))
+                : null;
+
+            Headers = SafeHeaders(grid);
+
+            RowCount = patternRows > 0
+                ? patternRows
+                : (_rows.Length > 0 ? _rows.Length : _fallbackRows?.Length ?? 0);
+
+            // Thứ tự suy luận số cột: GridPattern -> header -> số ô của dòng đầu tiên.
+            ColumnCount = patternCols > 0
+                ? patternCols
+                : (Headers.Count > 0 ? Headers.Count : FirstRowCellCount());
         }
-        catch { }
 
-        return null;
+        private int FirstRowCellCount()
+        {
+            var cells = CellsOf(0);
+            return cells?.Length ?? 0;
+        }
+
+        private static DataGridViewRow[] SafeRows(AutomationElement grid)
+        {
+            try { return grid.AsDataGridView()?.Rows ?? Array.Empty<DataGridViewRow>(); }
+            catch { return Array.Empty<DataGridViewRow>(); }
+        }
+
+        private static IReadOnlyList<string> SafeHeaders(AutomationElement grid)
+        {
+            try
+            {
+                var header = grid.AsDataGridView()?.Header;
+                if (header?.Columns is { Length: > 0 } columns)
+                {
+                    return columns.Select(c =>
+                    {
+                        try { return c.Text ?? string.Empty; }
+                        catch { return string.Empty; }
+                    }).ToList();
+                }
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                var headerItems = grid.FindAllDescendants(cf => cf.ByControlType(ControlType.HeaderItem));
+                if (headerItems.Length > 0)
+                {
+                    return headerItems.Select(h => h.SafeName()).ToList();
+                }
+            }
+            catch { /* ignore */ }
+
+            return Array.Empty<string>();
+        }
+
+        private AutomationElement[]? CellsOf(int row)
+        {
+            if (row < 0) return null;
+            if (_cellCache.TryGetValue(row, out var cached)) return cached;
+
+            AutomationElement[]? cells = null;
+            try
+            {
+                if (row < _rows.Length)
+                {
+                    cells = _rows[row].Cells.Cast<AutomationElement>().ToArray();
+                }
+                else if (_fallbackRows != null && row < _fallbackRows.Length)
+                {
+                    cells = _fallbackRows[row].FindAllChildren();
+                }
+            }
+            catch { cells = null; }
+
+            if (cells != null)
+            {
+                _cellCache[row] = cells;
+            }
+
+            return cells;
+        }
+
+        public AutomationElement? GetCell(int row, int col)
+        {
+            if (row < 0 || col < 0) return null;
+
+            var cells = CellsOf(row);
+            if (cells != null && col < cells.Length) return cells[col];
+
+            try
+            {
+                if (_grid.Patterns.Grid.IsSupported)
+                {
+                    return _grid.Patterns.Grid.Pattern.GetItem(row, col);
+                }
+            }
+            catch { /* WinForms DataGridView ném NotImplementedException */ }
+
+            return null;
+        }
+
+        public string GetCellText(int row, int col)
+        {
+            var cell = GetCell(row, col);
+            if (cell == null) return string.Empty;
+            return GetElementValue(cell) ?? cell.SafeName();
+        }
+
+        /// <summary>Cột nhận theo tên (khớp chính xác rồi mới khớp chứa) hoặc theo chỉ số 0-based.</summary>
+        public int ResolveColumnIndex(string column)
+        {
+            if (int.TryParse(column.Trim(), out var byIndex))
+            {
+                return byIndex >= 0 && (ColumnCount == 0 || byIndex < ColumnCount) ? byIndex : -1;
+            }
+
+            var match = ItemMatcher.Match(Headers, column);
+            return match.Kind is ItemMatchKind.Exact or ItemMatchKind.Contains ? match.Index : -1;
+        }
     }
 
     public InteractionResult MenuClick(Window window, string menuPath)

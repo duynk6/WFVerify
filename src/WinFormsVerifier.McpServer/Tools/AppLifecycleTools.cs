@@ -25,8 +25,20 @@ public static class AppLifecycleTools
         UiSession session,
         [Description("Đường dẫn tuyệt đối hoặc tương đối tới file .exe của ứng dụng WinForms.")]
         string exePath,
-        [Description("Danh sách tham số dòng lệnh truyền cho ứng dụng (tùy chọn).")]
+        [Description("""
+            Danh sách tham số dòng lệnh truyền cho ứng dụng (tùy chọn).
+            Hỗ trợ placeholder để KHÔNG phải viết mật khẩu vào lời gọi tool:
+            '${env:TEN_BIEN}' lấy từ biến môi trường của server,
+            '${file:C:\duong\dan\creds.json#sql.password}' lấy một khoá trong file JSON,
+            '${file:C:\duong\dan\token.txt}' lấy toàn bộ nội dung file.
+            """)]
         string[]? arguments = null,
+        [Description("""
+            Đường dẫn file chứa danh sách tham số, dùng thay cho 'arguments' khi tham số có thông tin nhạy cảm.
+            Định dạng: mảng JSON ["-u","sa"] hoặc file text mỗi dòng một tham số (dòng bắt đầu bằng '#' là chú thích).
+            Các placeholder ${env:...} / ${file:...} trong file cũng được giải. Nếu truyền cả 'arguments' thì nối tiếp sau.
+            """)]
+        string? argumentsFile = null,
         [Description("Thư mục làm việc (Working Directory). Mặc định là thư mục chứa file .exe.")]
         string? workingDir = null,
         [Description("Biến môi trường truyền cho tiến trình, mỗi phần tử dạng 'TEN=GIA_TRI' (vd 'ConnectionStrings__Main=Server=.;Database=UAT'). Dùng để đổi chuỗi kết nối SQL hoặc môi trường mà không phải sửa file config.")]
@@ -54,12 +66,28 @@ public static class AppLifecycleTools
                 UseShellExecute = false
             };
 
+            var effectiveArgs = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(argumentsFile))
+            {
+                var argsFilePath = PathGuard.ValidateAndNormalize(argumentsFile, nameof(argumentsFile));
+                if (!File.Exists(argsFilePath))
+                {
+                    throw new ToolException(ErrorCode.PathDenied, $"Không tìm thấy file tham số tại '{argsFilePath}'.");
+                }
+
+                effectiveArgs.AddRange(ArgumentResolver.ParseArgumentsFile(File.ReadAllText(argsFilePath), argsFilePath));
+            }
+
             if (arguments != null && arguments.Length > 0)
             {
-                foreach (var arg in arguments)
-                {
-                    psi.ArgumentList.Add(arg);
-                }
+                effectiveArgs.AddRange(arguments);
+            }
+
+            // Giải ${env:...} / ${file:...} SAU khi gộp, để cả hai nguồn đều dùng được placeholder.
+            foreach (var arg in ArgumentResolver.ResolveAll(effectiveArgs))
+            {
+                psi.ArgumentList.Add(arg);
             }
 
             if (environment != null && environment.Length > 0)
@@ -77,7 +105,7 @@ public static class AppLifecycleTools
                             "Mỗi phần tử phải có dạng 'TEN=GIA_TRI', ví dụ 'DB_ENV=UAT'.");
                     }
 
-                    psi.Environment[entry[..sep].Trim()] = entry[(sep + 1)..];
+                    psi.Environment[entry[..sep].Trim()] = ArgumentResolver.Resolve(entry[(sep + 1)..]);
                 }
             }
 
@@ -352,6 +380,21 @@ public static class AppLifecycleTools
                             });
                         }
                     }
+                }
+
+                // Form MDI child không phải cửa sổ cấp cao nhất nên không xuất hiện ở vòng lặp trên.
+                foreach (var child in session.GetMdiChildWindows())
+                {
+                    list.Add(new
+                    {
+                        title = child.SafeName(),
+                        name = child.SafeName(),
+                        automationId = child.SafeAutomationId(),
+                        className = child.SafeClassName(),
+                        isModal = false,
+                        isMdiChild = true,
+                        nativeHandle = child.Properties.NativeWindowHandle.ValueOrDefault.ToInt64()
+                    });
                 }
 
                 return list;

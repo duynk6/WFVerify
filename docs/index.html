@@ -693,7 +693,7 @@
           </div>
           <div class="brand-text">
             <h1>WinForms Verifier</h1>
-            <span class="brand-badge">MCP Server v1.0.0</span>
+            <span class="brand-badge">MCP Server v1.3.0</span>
           </div>
         </a>
       </div>
@@ -711,18 +711,18 @@
         <a href="#setup" class="nav-item"><i data-lucide="terminal"></i> Cài đặt & Tích hợp Client</a>
         <a href="#security" class="nav-item"><i data-lucide="shield-check"></i> Ràng buộc & Bảo mật</a>
 
-        <div class="nav-group-title">MCP Tools (26 công cụ)</div>
+        <div class="nav-group-title">MCP Tools (28 công cụ)</div>
         <a href="#tools-diagnostics" class="nav-item"><i data-lucide="activity"></i> Diagnostics & Health</a>
-        <a href="#tools-lifecycle" class="nav-item"><i data-lucide="power"></i> App Lifecycle (4)</a>
+        <a href="#tools-lifecycle" class="nav-item"><i data-lucide="power"></i> App Lifecycle (5)</a>
         <a href="#tools-inspection" class="nav-item"><i data-lucide="file-tree"></i> UI Inspection (3)</a>
-        <a href="#tools-interaction" class="nav-item"><i data-lucide="mouse-pointer-click"></i> UI Interaction (12)</a>
+        <a href="#tools-interaction" class="nav-item"><i data-lucide="mouse-pointer-click"></i> UI Interaction (13)</a>
         <a href="#tools-sync" class="nav-item"><i data-lucide="timer"></i> Synchronization (2)</a>
         <a href="#tools-visual" class="nav-item"><i data-lucide="camera"></i> Visual Verification (1)</a>
         <a href="#tools-static" class="nav-item"><i data-lucide="code"></i> Static Analysis (3)</a>
 
         <div class="nav-group-title">Tra cứu Nâng cao</div>
         <a href="#selectors" class="nav-item"><i data-lucide="crosshair"></i> Cú pháp Selector</a>
-        <a href="#roslyn-rules" class="nav-item"><i data-lucide="check-circle-2"></i> 14 Rule Roslyn (WF001-060)</a>
+        <a href="#roslyn-rules" class="nav-item"><i data-lucide="check-circle-2"></i> 15 Rule Roslyn (WF001-060)</a>
         <a href="#troubleshooting" class="nav-item"><i data-lucide="alert-triangle"></i> Bảng mã lỗi & Sự cố</a>
       </nav>
     </aside>
@@ -737,10 +737,10 @@
         </p>
         <div class="hero-stats">
           <div class="stat-pill success">
-            <i data-lucide="badge-check" size="16"></i> 18/18 Tests Passed (100%)
+            <i data-lucide="badge-check" size="16"></i> 57/57 Tests Passed (44 unit + 13 integration)
           </div>
           <div class="stat-pill cyan">
-            <i data-lucide="wrench" size="16"></i> 26 MCP Tools
+            <i data-lucide="wrench" size="16"></i> 28 MCP Tools
           </div>
           <div class="stat-pill">
             <i data-lucide="shield" size="16"></i> PathGuard Whitelist Protection
@@ -821,12 +821,35 @@
         </div>
 
         <div class="card">
+          <div class="card-title"><i data-lucide="zap"></i> Cài đặt nhanh (khuyên dùng)</div>
+          <p class="card-text">
+            Chạy <code class="inline-code">install.ps1</code> ở gốc repo — script tự <code class="inline-code">dotnet publish</code>, tự suy ra đường dẫn <code class="inline-code">.exe</code> từ vị trí thực tế (không hardcode đường dẫn) rồi đăng ký thẳng với client. Với client cần sửa file JSON, script tự merge và backup file cũ trước khi ghi đè.
+          </p>
+          <div class="code-container">
+            <div class="code-header">
+              <span>PowerShell</span>
+              <button class="copy-btn" onclick="copyCode('quick-install')"><i data-lucide="copy" size="14"></i> Copy</button>
+            </div>
+            <pre><code id="quick-install">.\install.ps1 -Client claude-code   # nhanh nhất, không đụng file JSON
+.\install.ps1 -Client claude-desktop
+.\install.ps1 -Client cursor
+.\install.ps1 -Client antigravity
+.\install.ps1                       # in JSON để dán tay cho client khác</code></pre>
+          </div>
+          <p class="card-text">
+            Mặc định whitelist đúng thư mục repo cho <code class="inline-code">WFVERIFY_ALLOWED_ROOTS</code>; thêm <code class="inline-code">-AllowedRoots "..."</code> nếu cần. Đã publish rồi thì thêm <code class="inline-code">-SkipPublish</code>.
+          </p>
+        </div>
+
+        <div class="card">
           <div class="card-title"><i data-lucide="check"></i> Yêu cầu Môi trường</div>
           <ul style="padding-left: 20px; color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
             <li><strong>Hệ điều hành:</strong> Windows 10/11 x64 hoặc Windows Server có hỗ trợ Desktop Experience.</li>
             <li><strong>Runtime:</strong> .NET 8.0 Runtime (Windows Desktop x64).</li>
             <li><strong>Môi trường hiển thị:</strong> Interactive Desktop Session (màn hình mở, không bị lock screen hoặc Remote Desktop disconnected).</li>
           </ul>
+
+          <p class="card-text" style="margin-top: -8px;"><strong>Cài đặt thủ công từng client:</strong></p>
 
           <!-- 1. Antigravity IDE -->
           <div class="card-title" style="margin-top: 24px;"><i data-lucide="sparkles"></i> 1. Cấu hình Antigravity IDE (<code style="font-size: 0.9rem;">.mcp.json</code> hoặc <code style="font-size: 0.9rem;">.agents/mcp_config.json</code>)</div>
@@ -937,11 +960,60 @@
         </div>
       </section>
 
+      <!-- Environment Constraints & Security -->
+      <section class="section" id="security">
+        <div class="section-header">
+          <i data-lucide="shield-check" size="24"></i>
+          <h2>Ràng buộc Môi trường & Bảo mật</h2>
+        </div>
+
+        <div class="card">
+          <div class="card-title"><i data-lucide="alert-octagon"></i> Ràng buộc cứng (không có cách lách)</div>
+          <p class="card-text">UI Automation không phải API chạy ở đâu cũng được:</p>
+          <table class="rules-table">
+            <thead>
+              <tr><th>Ràng buộc</th><th>Chi tiết</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>Interactive desktop session</strong></td><td>Cần phiên desktop đang mở khoá. Không chạy được qua SSH, Windows Service, hay CI agent chạy nền — muốn dùng trong CI phải có RDP session giữ mở hoặc self-hosted runner ở chế độ interactive.</td></tr>
+              <tr><td><strong>Màn hình khoá</strong></td><td>Khi Windows khoá màn hình, click sẽ thất bại và <code class="inline-code">wf_screenshot</code> trả ảnh đen.</td></tr>
+              <tr><td><strong>Quyền</strong></td><td>Ứng dụng đích chạy elevated (Run as administrator) thì server cũng phải elevated, nếu không UIA bị UIPI chặn và mọi thao tác đều thất bại.</td></tr>
+              <tr><td><strong>DPI</strong></td><td>Server đã bật per-monitor DPI aware v2 qua <code class="inline-code">app.manifest</code>. Build lại mà thiếu manifest thì <code class="inline-code">BoundingRectangle</code> và ảnh chụp sẽ lệch trên máy scale 125/150%.</td></tr>
+              <tr><td><strong>Bitness</strong></td><td>Server build x64. Attach ứng dụng 32-bit vẫn chạy qua UIA3 (cross-bitness).</td></tr>
+              <tr><td><strong>Control third-party</strong></td><td>DevExpress / Telerik / Infragistics vẽ custom chỉ hỗ trợ best-effort qua <code class="inline-code">LegacyIAccessible</code>, không cam kết. WPF / WinUI / MAUI nằm ngoài phạm vi.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title"><i data-lucide="camera-off"></i> Ảnh chụp màn hình có thể lộ dữ liệu nhạy cảm</div>
+            <p class="card-text"><code class="inline-code">wf_screenshot</code> chụp nguyên cửa sổ ứng dụng — bao gồm dữ liệu khách hàng, số liệu tài chính, thông tin đăng nhập đang hiển thị — rồi gửi thẳng cho model. Đặt <code class="inline-code">WFVERIFY_DISABLE_SCREENSHOT=1</code> để vô hiệu hoá hẳn tool này.</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><i data-lucide="lock-keyhole"></i> Chế độ chỉ-đọc cho production</div>
+            <p class="card-text">Đặt <code class="inline-code">WFVERIFY_READONLY=1</code> để chặn <code class="inline-code">wf_set_value</code>/<code class="inline-code">wf_grid_set_cell</code> (lỗi <code class="inline-code">READONLY_MODE</code>) và chặn <code class="inline-code">wf_invoke</code> vào control có nhãn khớp từ khoá ghi dữ liệu (<code class="inline-code">Ghi</code>, <code class="inline-code">Lưu</code>, <code class="inline-code">Xóa</code>, <code class="inline-code">Cập nhật</code>, <code class="inline-code">Duyệt</code>, <code class="inline-code">Save</code>, <code class="inline-code">Delete</code>, <code class="inline-code">Update</code>, <code class="inline-code">Insert</code>, <code class="inline-code">Submit</code>, <code class="inline-code">Apply</code>). Tuỳ biến bằng <code class="inline-code">WFVERIFY_READONLY_BLOCKLIST</code> (`;`-separated); so khớp theo ranh giới từ nên <code class="inline-code">Nghiên cứu</code> không bị chặn bởi <code class="inline-code">Ghi</code>.</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><i data-lucide="key-round"></i> Không đưa mật khẩu vào lời gọi tool</div>
+            <p class="card-text"><code class="inline-code">wf_launch_app</code> nhận <code class="inline-code">argumentsFile</code> (mảng JSON hoặc file text mỗi dòng một tham số) và placeholder <code class="inline-code">${env:TEN_BIEN}</code>, <code class="inline-code">${file:C:\path\creds.json#sql.password}</code> trong <code class="inline-code">arguments</code>/<code class="inline-code">environment</code> — server tự giải trước khi đưa vào <code class="inline-code">ProcessStartInfo.ArgumentList</code>, không bao giờ lộ ra command line.</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><i data-lucide="folder-lock"></i> PathGuard whitelist</div>
+            <p class="card-text"><code class="inline-code">WFVERIFY_ALLOWED_ROOTS</code> là hàng rào duy nhất cho <code class="inline-code">wf_launch_app</code>, <code class="inline-code">wf_analyze_form</code>, <code class="inline-code">wf_analyze_project</code>. Đặt càng hẹp càng tốt; bỏ trống thì mặc định là thư mục làm việc của server. Đường dẫn ngoài whitelist bị chặn với <code class="inline-code">PATH_DENIED</code>.</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><i data-lucide="skull"></i> Không giết ứng dụng nó không khởi chạy</div>
+            <p class="card-text">Với app phải đăng nhập / chọn SQL thủ công, dùng <code class="inline-code">wf_attach_app</code> rồi kết thúc bằng <code class="inline-code">wf_detach_app</code> (chỉ drop session, không đụng tiến trình). <code class="inline-code">wf_close_app</code> sẽ <strong>từ chối</strong> nếu tiến trình không do server khởi chạy.</p>
+          </div>
+        </div>
+      </section>
+
       <!-- MCP Tools Explorer -->
       <section class="section" id="tools">
         <div class="section-header">
           <i data-lucide="wrench" size="24"></i>
-          <h2>Danh mục 26 MCP Tools</h2>
+          <h2>Danh mục 28 MCP Tools</h2>
         </div>
 
         <!-- 1. Diagnostics -->
@@ -961,14 +1033,15 @@
 
         <!-- 2. Lifecycle -->
         <div class="tool-category" id="tools-lifecycle">
-          <div class="category-badge"><i data-lucide="power" size="14"></i> 2. App Lifecycle Management (4 tools)</div>
+          <div class="category-badge"><i data-lucide="power" size="14"></i> 2. App Lifecycle Management (5 tools)</div>
           
           <div class="tool-card">
             <div class="tool-header"><span class="tool-name">wf_launch_app</span><span class="tool-tag">Lifecycle</span></div>
             <p class="card-text">Khởi chạy ứng dụng WinForms (.exe) có kiểm tra whitelist và chờ cửa sổ chính xuất hiện.</p>
             <div class="tool-params">
               <div class="param-row"><span class="param-name">executable_path</span><span class="param-desc">(bắt buộc) Đường dẫn tuyệt đối tới file .exe.</span></div>
-              <div class="param-row"><span class="param-name">arguments</span><span class="param-desc">(tùy chọn) Danh sách tham số dòng lệnh dạng mảng chuỗi.</span></div>
+              <div class="param-row"><span class="param-name">arguments</span><span class="param-desc">(tùy chọn) Danh sách tham số dòng lệnh dạng mảng chuỗi, hỗ trợ placeholder <code>${env:TEN_BIEN}</code> / <code>${file:path#key}</code>.</span></div>
+              <div class="param-row"><span class="param-name">argumentsFile</span><span class="param-desc">(tùy chọn) Mảng JSON hoặc file text mỗi dòng một tham số — tránh lộ credential trên command line.</span></div>
               <div class="param-row"><span class="param-name">working_directory</span><span class="param-desc">(tùy chọn) Thư mục làm việc của tiến trình.</span></div>
               <div class="param-row"><span class="param-name">timeout_ms</span><span class="param-desc">(mặc định: 15000) Thời gian chờ cửa sổ chính (ms).</span></div>
             </div>
@@ -984,12 +1057,17 @@
 
           <div class="tool-card">
             <div class="tool-header"><span class="tool-name">wf_list_windows</span><span class="tool-tag">Inspection</span></div>
-            <p class="card-text">Liệt kê tất cả các cửa sổ cấp cao nhất (top-level windows) và modal dialogs thuộc ứng dụng đang kiểm thử.</p>
+            <p class="card-text">Liệt kê tất cả các cửa sổ cấp cao nhất (top-level windows), form con MDI và modal dialogs thuộc ứng dụng đang kiểm thử.</p>
+          </div>
+
+          <div class="tool-card">
+            <div class="tool-header"><span class="tool-name">wf_detach_app</span><span class="tool-tag">Lifecycle</span></div>
+            <p class="card-text">Ngắt session khỏi ứng dụng mà <strong>không</strong> đụng tới tiến trình — dùng cho app phải đăng nhập / chọn SQL thủ công mà không do server khởi chạy.</p>
           </div>
 
           <div class="tool-card">
             <div class="tool-header"><span class="tool-name">wf_close_app</span><span class="tool-tag">Lifecycle</span></div>
-            <p class="card-text">Đóng ứng dụng nhẹ nhàng hoặc cưỡng bức (kill) và giải phóng toàn bộ tài nguyên UIA3 session.</p>
+            <p class="card-text">Đóng ứng dụng nhẹ nhàng hoặc cưỡng bức (kill) và giải phóng toàn bộ tài nguyên UIA3 session. Từ chối nếu tiến trình không do server khởi chạy (dùng <code>wf_detach_app</code> thay thế).</p>
             <div class="tool-params">
               <div class="param-row"><span class="param-name">force</span><span class="param-desc">(mặc định: false) Kill ngay lập tức nếu true.</span></div>
             </div>
@@ -1023,7 +1101,7 @@
 
         <!-- 4. Interaction -->
         <div class="tool-category" id="tools-interaction">
-          <div class="category-badge"><i data-lucide="mouse-pointer-click" size="14"></i> 4. UI Interaction (12 tools)</div>
+          <div class="category-badge"><i data-lucide="mouse-pointer-click" size="14"></i> 4. UI Interaction (13 tools)</div>
           
           <div class="grid-2">
             <div class="tool-card">
@@ -1040,11 +1118,15 @@
             </div>
             <div class="tool-card">
               <div class="tool-header"><span class="tool-name">wf_select</span><span class="tool-tag">Selection</span></div>
-              <p class="card-text">Chọn mục trong ComboBox, ListBox, TabControl, TreeView theo tên hoặc chỉ số index.</p>
+              <p class="card-text">Chọn mục trong ComboBox, ListBox, TabControl, TreeView theo tên hoặc chỉ số index. Ưu tiên khớp chính xác trước <code>Contains</code>; nhiều mục cùng khớp <code>Contains</code> → lỗi <code>AMBIGUOUS</code>. Luôn đọc lại lựa chọn để xác nhận trước khi báo thành công.</p>
             </div>
             <div class="tool-card">
               <div class="tool-header"><span class="tool-name">wf_grid_read</span><span class="tool-tag">DataGrid</span></div>
-              <p class="card-text">Đọc dữ liệu DataGridView thành bảng text có cấu trúc dòng/cột rõ ràng.</p>
+              <p class="card-text">Đọc dữ liệu DataGridView/C1FlexGrid thành bảng text có cấu trúc dòng/cột rõ ràng, kèm <code>headers</code>.</p>
+            </div>
+            <div class="tool-card">
+              <div class="tool-header"><span class="tool-name">wf_grid_find</span><span class="tool-tag">DataGrid</span></div>
+              <p class="card-text">Tìm dòng theo điều kiện trên một cột (<code>column</code> nhận tên header hoặc chỉ số, <code>op</code> = <code>contains</code>/<code>equals</code>/<code>startswith</code>), trả <code>rowIndex</code> + nội dung dòng — thay cho việc kéo cả bảng nghìn dòng về rồi tự lọc.</p>
             </div>
             <div class="tool-card">
               <div class="tool-header"><span class="tool-name">wf_grid_set_cell</span><span class="tool-tag">DataGrid</span></div>
@@ -1072,7 +1154,7 @@
 
           <div class="tool-card" id="tools-static">
             <div class="tool-header"><span class="tool-name">wf_analyze_form</span><span class="tool-tag">Roslyn AST</span></div>
-            <p class="card-text">Phân tích tĩnh cụm partial class của Form (<code>Form.cs</code> + <code>Form.Designer.cs</code>) phát hiện vi phạm 14 rules.</p>
+            <p class="card-text">Phân tích tĩnh cụm partial class của Form (<code>Form.cs</code> + <code>Form.Designer.cs</code>) phát hiện vi phạm 15 rules.</p>
           </div>
 
           <div class="tool-card">
@@ -1082,7 +1164,7 @@
 
           <div class="tool-card">
             <div class="tool-header"><span class="tool-name">wf_list_rules</span><span class="tool-tag">Roslyn Info</span></div>
-            <p class="card-text">Liệt kê danh sách 14 rule phân tích tĩnh kèm mô tả chi tiết và hướng dẫn sửa lỗi.</p>
+            <p class="card-text">Liệt kê danh sách 15 rule phân tích tĩnh kèm mô tả chi tiết và hướng dẫn sửa lỗi.</p>
           </div>
         </div>
       </section>
@@ -1144,6 +1226,11 @@
               </tr>
             </tbody>
           </table>
+
+          <div class="card-title" style="margin-top: 8px;"><i data-lucide="app-window"></i> Selector cho cửa sổ (<code style="font-size:0.9rem;">windowSelector</code>)</div>
+          <p class="card-text">
+            Dùng tập tiền tố nhỏ hơn: <code class="inline-code">id:</code>, <code class="inline-code">name:</code>, <code class="inline-code">name~:</code>, <code class="inline-code">class:</code>, <code class="inline-code">title:</code>, <code class="inline-code">title~:</code>. Khớp cửa sổ cấp cao nhất trước, sau đó tới form con MDI (duyệt <code class="inline-code">MDIClient</code> qua Win32). Một <code class="inline-code">windowSelector</code> <strong>không bao giờ</strong> khớp vào tab hay panel — khi nhiều tab của cùng form dùng chung id control (VD <code class="inline-code">fg</code>, <code class="inline-code">txtMaHang</code>), phải scope bằng selector phân cấp <code class="inline-code">id:tabTheoDoi > id:fg</code>. Một <code class="inline-code">id:fg</code> trống ngữ cảnh sẽ trả về control <em>đang hiển thị</em> (tab đang active).
+          </p>
         </div>
       </section>
 
@@ -1151,7 +1238,7 @@
       <section class="section" id="roslyn-rules">
         <div class="section-header">
           <i data-lucide="check-circle-2" size="24"></i>
-          <h2>Bộ 14 Rule Phân tích tĩnh Roslyn (WF001 – WF060)</h2>
+          <h2>Bộ 15 Rule Phân tích tĩnh Roslyn (WF001 – WF060)</h2>
         </div>
 
         <div class="card">
@@ -1285,6 +1372,14 @@
           </div>
 
           <div class="card">
+            <div class="card-title" style="color: var(--accent-amber);"><i data-lucide="app-window-mac"></i> WINDOW_NOT_FOUND</div>
+            <p class="card-text">
+              <strong>Nguyên nhân:</strong> <code>windowSelector</code> không khớp cửa sổ nào — thường gặp khi nhắm vào form con MDI bằng selector cấp cao nhất.<br>
+              <strong>Khắc phục:</strong> Lỗi trả về liệt kê sẵn các form MDI đang mở kèm gợi ý selector phân cấp; hoặc gọi <code>wf_list_windows</code> để xem toàn bộ cửa sổ (kể cả MDI child).
+            </p>
+          </div>
+
+          <div class="card">
             <div class="card-title" style="color: var(--accent-cyan);"><i data-lucide="lock"></i> PATH_DENIED</div>
             <p class="card-text">
               <strong>Nguyên nhân:</strong> Đường dẫn file nằm ngoài danh sách whitelist của <code>PathGuard</code>.<br>
@@ -1297,6 +1392,22 @@
             <p class="card-text">
               <strong>Nguyên nhân:</strong> Thao tác UI vượt quá thời gian chờ (mặc định 10s). Nếu xảy ra 2 lần liên tiếp, hệ thống sẽ kích hoạt cờ Poisoned Session.<br>
               <strong>Khắc phục:</strong> Đóng app bằng <code>wf_close_app(force=true)</code> và khởi động lại phiên làm việc mới.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="color: var(--accent-rose);"><i data-lucide="ban"></i> READONLY_MODE</div>
+            <p class="card-text">
+              <strong>Nguyên nhân:</strong> Server đang chạy với <code>WFVERIFY_READONLY=1</code> nên <code>wf_set_value</code>/<code>wf_grid_set_cell</code> bị chặn, và <code>wf_invoke</code> bị chặn khi nhãn control khớp từ khoá ghi dữ liệu.<br>
+              <strong>Khắc phục:</strong> Đây là hành vi cố ý cho môi trường production. Tắt biến môi trường nếu thực sự cần ghi, hoặc tuỳ biến danh sách chặn bằng <code>WFVERIFY_READONLY_BLOCKLIST</code>.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="card-title" style="color: var(--accent-amber);"><i data-lucide="list-x"></i> AMBIGUOUS</div>
+            <p class="card-text">
+              <strong>Nguyên nhân:</strong> <code>wf_select</code> khớp <code>item</code> bằng <code>Contains</code> nhưng trúng nhiều hơn 1 mục (VD <code>"May 1"</code> trúng cả <code>"May 1"</code> và <code>"May 10"</code>).<br>
+              <strong>Khắc phục:</strong> Dùng tên khớp chính xác tuyệt đối, hoặc dùng <code>index</code> theo danh sách <code>[index] tên</code> mà lỗi trả về.
             </p>
           </div>
         </div>

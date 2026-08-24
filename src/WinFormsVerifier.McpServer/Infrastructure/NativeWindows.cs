@@ -30,6 +30,11 @@ public static class NativeWindows
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+    private const uint GW_CHILD = 5;
+    private const uint GW_HWNDNEXT = 2;
+
     public static List<TopLevelWindow> GetVisibleTopLevelWindows()
     {
         var result = new List<TopLevelWindow>();
@@ -93,6 +98,51 @@ public static class NativeWindows
         }, IntPtr.Zero);
 
         return result;
+    }
+
+    /// <summary>
+    /// Các form MDI child bên trong một cửa sổ cấp cao nhất.
+    /// Form MDI child (frmChuanBiSX...) KHÔNG phải cửa sổ cấp cao nhất nên EnumWindows không thấy;
+    /// chúng là con TRỰC TIẾP của MDIClient bên trong form cha. Duyệt bằng GetWindow (con trực tiếp)
+    /// chứ không dùng EnumChildWindows — hàm đó đệ quy toàn bộ cây con nên trả về cả Button/Label.
+    /// </summary>
+    public static List<TopLevelWindow> GetMdiChildWindows(IntPtr parent, int processId)
+    {
+        var result = new List<TopLevelWindow>();
+
+        foreach (var child in ImmediateChildren(parent))
+        {
+            if (ClassNameOf(child) != "MDIClient") continue;
+
+            foreach (var mdiChild in ImmediateChildren(child))
+            {
+                if (!IsWindowVisible(mdiChild)) continue;
+
+                var sbTitle = new StringBuilder(512);
+                GetWindowText(mdiChild, sbTitle, sbTitle.Capacity);
+
+                result.Add(new TopLevelWindow(mdiChild, processId, sbTitle.ToString(), ClassNameOf(mdiChild)));
+            }
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<IntPtr> ImmediateChildren(IntPtr parent)
+    {
+        var child = GetWindow(parent, GW_CHILD);
+        while (child != IntPtr.Zero)
+        {
+            yield return child;
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+    }
+
+    private static string ClassNameOf(IntPtr hwnd)
+    {
+        var sb = new StringBuilder(256);
+        GetClassName(hwnd, sb, sb.Capacity);
+        return sb.ToString();
     }
 
     /// <summary>

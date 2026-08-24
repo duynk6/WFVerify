@@ -18,11 +18,11 @@
    - Đảm bảo an toàn luồng COM cho FlaUI và UIA3.
    - Tích hợp cơ chế **Poison Detection** (cảnh báo session hỏng sau 2 lần timeout liên tiếp).
    - Tự động phát hiện và chặn lỗi `BLOCKED_BY_MODAL` khi ứng dụng hiển thị hộp thoại `MessageBox`.
-3. **Bộ 27 Công cụ MCP Toàn diện:**
+3. **Bộ 28 Công cụ MCP Toàn diện:**
    - **Diagnostics:** `wf_ping` (kiểm tra runtime, session, DPI scale).
-   - **App Lifecycle:** `wf_launch_app` (hỗ trợ `arguments` + biến môi trường), `wf_attach_app` (chờ cửa sổ, tìm theo tiêu đề của mọi cửa sổ), `wf_list_windows`, `wf_detach_app`, `wf_close_app`.
+   - **App Lifecycle:** `wf_launch_app` (hỗ trợ `arguments`, `argumentsFile`, placeholder `${env:...}` / `${file:...#key}`, biến môi trường), `wf_attach_app` (chờ cửa sổ, tìm theo tiêu đề của mọi cửa sổ), `wf_list_windows`, `wf_detach_app`, `wf_close_app`.
    - **UI Inspection:** `wf_get_ui_tree` (cây UI compact text tiết kiệm ~55% token), `wf_find_elements`, `wf_get_element`.
-   - **UI Interaction:** `wf_invoke`, `wf_set_value`, `wf_toggle`, `wf_select`, `wf_expand`, `wf_send_keys`, `wf_focus`, `wf_scroll_into_view`, `wf_grid_read`, `wf_grid_set_cell`, `wf_menu_click`, `wf_dialog_respond`.
+   - **UI Interaction:** `wf_invoke`, `wf_set_value`, `wf_toggle`, `wf_select`, `wf_expand`, `wf_send_keys`, `wf_focus`, `wf_scroll_into_view`, `wf_grid_read`, `wf_grid_find`, `wf_grid_set_cell`, `wf_menu_click`, `wf_dialog_respond`.
    - **Synchronization:** `wf_wait_for`, `wf_wait_idle`.
    - **Visual Verification:** `wf_screenshot` (chụp cửa sổ/control, downscale giữ tỉ lệ, nén dưới 4MB).
    - **Static Analysis:** `wf_analyze_form`, `wf_analyze_project`, `wf_list_rules`.
@@ -36,6 +36,29 @@
 ---
 
 ## 🚀 Cài đặt & Tích hợp vào các AI Client / IDE
+
+### ⚡ Cài đặt nhanh (khuyên dùng)
+
+Thay vì tự publish rồi copy-paste JSON với đường dẫn tuyệt đối, chạy [`install.ps1`](file:///e:/AgentTest/WFVerify/install.ps1) — script tự `dotnet publish`, tự suy ra đường dẫn `.exe` từ vị trí thực tế của repo (không hardcode) và đăng ký thẳng với client:
+
+```powershell
+# Claude Code CLI — nhanh nhất, không cần đụng tới file JSON nào
+.\install.ps1 -Client claude-code
+
+# Claude Desktop — tự merge vào claude_desktop_config.json (backup file cũ trước khi ghi)
+.\install.ps1 -Client claude-desktop
+
+# Cursor / Antigravity — tự merge vào .cursor/mcp.json hoặc .mcp.json của workspace
+.\install.ps1 -Client cursor
+.\install.ps1 -Client antigravity
+
+# Client khác (VS Code Cline/Roo, ...) — chỉ in JSON sẵn sàng dán, không đụng file nào
+.\install.ps1
+```
+
+Mặc định chỉ whitelist đúng thư mục repo cho `WFVERIFY_ALLOWED_ROOTS`; truyền `-AllowedRoots "E:\...;C:\..."` nếu cần thêm thư mục. Đã publish rồi thì thêm `-SkipPublish` để chạy lại nhanh. Xem `Get-Help .\install.ps1 -Full` để biết chi tiết từng tham số.
+
+### Cài đặt thủ công
 
 File thực thi MCP Server đã được biên dịch sẵn tại:
 ```
@@ -140,6 +163,8 @@ UI Automation không phải là API chạy ở đâu cũng được. Những rà
 ## 🔒 Lưu ý Bảo mật
 
 - **Ảnh chụp màn hình có thể chứa dữ liệu nhạy cảm.** `wf_screenshot` chụp nguyên cửa sổ ứng dụng — bao gồm dữ liệu khách hàng, số liệu tài chính, thông tin đăng nhập đang hiển thị — rồi gửi thẳng cho model. Nếu không chấp nhận được, đặt biến môi trường `WFVERIFY_DISABLE_SCREENSHOT=1` để vô hiệu hoá hẳn tool này.
+- **Chế độ chỉ-đọc cho môi trường production.** Đặt `WFVERIFY_READONLY=1` để chặn hẳn `wf_set_value` và `wf_grid_set_cell` (lỗi `READONLY_MODE`), đồng thời chặn `wf_invoke` vào control có nhãn khớp từ khoá ghi dữ liệu — mặc định `Ghi`, `Lưu`, `Xóa`, `Cập nhật`, `Duyệt`, `Save`, `Delete`, `Update`, `Insert`, `Submit`, `Apply`. Tuỳ biến danh sách bằng `WFVERIFY_READONLY_BLOCKLIST` (phân tách bằng `;`). So khớp theo ranh giới từ nên `Nghiên cứu` không bị chặn bởi `Ghi`, nhưng nhãn kiểu `Lưu lượng` thì có (thiên về an toàn).
+- **Không đưa mật khẩu vào lời gọi tool.** `wf_launch_app` nhận `argumentsFile` (mảng JSON hoặc file text mỗi dòng một tham số) và placeholder `${env:TEN_BIEN}`, `${file:C:\path\creds.json#sql.password}` trong `arguments`/`environment`; server tự giải trước khi đưa vào `ProcessStartInfo.ArgumentList`.
 - **`WFVERIFY_ALLOWED_ROOTS` là hàng rào duy nhất** cho `wf_launch_app`, `wf_analyze_form`, `wf_analyze_project`. Đặt càng hẹp càng tốt; bỏ trống thì mặc định là thư mục làm việc của server. Đường dẫn ngoài whitelist bị chặn với `PATH_DENIED`.
 - **Server không giết ứng dụng nó không khởi chạy.** Với app phải đăng nhập / chọn SQL thủ công, dùng `wf_attach_app` rồi kết thúc bằng `wf_detach_app`. `wf_close_app` sẽ **từ chối** nếu tiến trình không do server khởi chạy.
 - Không truyền mật khẩu thật qua prompt. Dùng `environment` của `wf_launch_app` hoặc file config cục bộ.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**WinForms Verifier** — an MCP (Model Context Protocol) server on .NET 8 (`net8.0-windows`, x64) that gives AI agents three capabilities over Windows Forms apps: live UI automation (FlaUI/UIA3), screenshot capture with downscaling, and Roslyn static analysis of Designer code. 27 tools, all prefixed `wf_`.
+**WinForms Verifier** — an MCP (Model Context Protocol) server on .NET 8 (`net8.0-windows`, x64) that gives AI agents three capabilities over Windows Forms apps: live UI automation (FlaUI/UIA3), screenshot capture with downscaling, and Roslyn static analysis of Designer code. 28 tools, all prefixed `wf_`.
 
 Key packages: `ModelContextProtocol 2.2.0`, `FlaUI.UIA3 5.0.0`, `Microsoft.CodeAnalysis.CSharp.Workspaces 4.8.0`, `Microsoft.Extensions.Hosting 8.0.1`.
 
@@ -12,7 +12,7 @@ Key packages: `ModelContextProtocol 2.2.0`, `FlaUI.UIA3 5.0.0`, `Microsoft.CodeA
 
 ```bash
 dotnet build                       # whole solution
-dotnet test                        # all 18 tests (unit + integration)
+dotnet test                        # all 57 tests (44 unit + 13 integration)
 dotnet test tests/WinFormsVerifier.UnitTests
 dotnet test --filter "FullyQualifiedName~RoslynRuleTests"
 dotnet test --filter "DisplayName~FullInteractiveWorkflow"
@@ -36,9 +36,22 @@ Request flow: **MCP client → stdio JSON-RPC → Tool (thin) → `session.RunAs
 - `Services/ElementLocator.cs` — parses selectors, narrows scope segment by segment with `Retry.WhileNull`; on failure computes Levenshtein similarity over visible `Name`/`AutomationId` and returns the top 10 as `candidates` in the error envelope.
 - `Services/Roslyn/` — `DesignerModel` parses `InitializeComponent()` into a control tree; `FormRules` runs the 15 `WF001`–`WF060` checks; `FormAnalyzer` clusters the partial-class files (`Form1.cs` + `Form1.Designer.cs` + `Form1.*.cs`) into a tolerant `CSharpCompilation` (missing references are acceptable).
 
+### Post-condition verification
+
+Every mutating interaction reads the state back before reporting success: `SetValue` re-reads the value,
+`Toggle` re-reads `ToggleState`, `Select` re-reads the container's `Selection` (or its displayed value),
+`Invoke` re-reads Toggle/SelectionItem state when the control has one. If the read-back does not match,
+the service retries with a physical `Click()` and only then attaches a `warnings` entry —
+never a bare `ok`. `Select` also prefers an exact item match over `Contains` and raises `AMBIGUOUS`
+when a contains-match hits several items (`ItemMatcher`).
+
 ### Selector syntax
 
-Hierarchical, `>`-separated: `id:grid > grid:2,3`. Segment prefixes: `id:`, `name:`, `name~:` (contains), `type:`, `class:`, `help:`, `idx:`, `grid:row,col`. No prefix means `name:`, or `id:` if it starts with `#`. Window selectors (`UiSession.FindWindowBySelector`) use a smaller set: `id:`, `name:`, `name~:`, `class:`, `title:`, `title~:`.
+Hierarchical, `>`-separated: `id:grid > grid:2,3`. Segment prefixes: `id:`, `name:`, `name~:` (contains), `type:`, `class:`, `help:`, `idx:`, `grid:row,col`. No prefix means `name:`, or `id:` if it starts with `#`. Window selectors (`UiSession.FindWindowBySelector`) use a smaller set: `id:`, `name:`, `name~:`, `class:`, `title:`, `title~:`,
+and match top-level windows first, then MDI child forms (`UiSession.GetMdiChildWindows`, Win32 `MDIClient` children).
+A `windowSelector` never matches a tab or panel: when several tabs of one form reuse the same control ids
+(`fg`, `txtMaHang`), scope with a hierarchical selector (`id:tabTheoDoi > id:fg`). A bare `id:fg` resolves to the
+*visible* match first (`ElementLocator.FirstPreferringVisible`), which is the active tab.
 
 ## Invariants (from AGENTS.md and .agents/rules/)
 
@@ -46,10 +59,14 @@ Hierarchical, `>`-separated: `id:grid > grid:2,3`. Segment prefixes: `id:`, `nam
 2. **All UIA3/FlaUI calls run on the STA thread** via `session.RunAsync(...)` with a hard timeout. COM objects are not thread-safe and MCP requests arrive concurrently.
 3. **Tools stay thin.** Validate → `McpResults.GuardAsync` → delegate to a domain service. Business logic belongs in `Services/`.
 4. **Every tool returns the standard envelope.** `McpResults.Ok(data, warnings)` / `McpResults.Fail(code, message, hint, candidates, details)`; failures set `IsError = true`. Codes live in `Models/ErrorCode.cs`. Throw `ToolException` from services — `GuardAsync` converts it. Selector failures must carry candidates; blocked-by-modal must return `BLOCKED_BY_MODAL` with the dialog title/text/buttons rather than timing out.
-5. **PathGuard every path input.** Whitelist from `WFVERIFY_ALLOWED_ROOTS` (`;`-separated), else working dir + upward search for `.sln`/`.git`/`plan.md`. Launched processes use `ProcessStartInfo.ArgumentList`, never concatenated command lines, with `UseShellExecute = false`.
-6. **No orphaned processes, and never kill what you didn't launch.** Only terminate processes where `LaunchedByUs == true` — `wf_close_app` refuses otherwise and points at `wf_detach_app`, which drops the session without touching the process. This matters for apps a human had to log into or point at a specific SQL environment by hand. Dispose `UIA3Automation` to release COM.
-7. **Interaction fallback chains** (see `.agents/rules/ui-automation-rules.md`): Invoke → `InvokePattern` → `SelectionItem` → `LegacyIAccessible.DoDefaultAction` → physical click; SetValue → `ValuePattern` → focus + SendKeys; Toggle → `TogglePattern` → `SelectionItem` → Invoke.
-8. **Images are raw bytes.** `ImageContentBlock.Data` takes `ReadOnlyMemory<byte>`; the SDK base64-encodes. Downscale before returning (cap ~4MB).
+5. **Read-only mode.** `WFVERIFY_READONLY=1` makes `wf_set_value` and `wf_grid_set_cell` fail with `READONLY_MODE`,
+   and blocks `wf_invoke` on controls whose label matches a write keyword (`Ghi`, `Lưu`, `Xóa`, `Cập nhật`, `Duyệt`, ...,
+   override with `WFVERIFY_READONLY_BLOCKLIST`, `;`-separated). Guard lives in `Infrastructure/ReadOnlyGuard.cs`;
+   matching is word-boundary based so `Nghiên cứu` is not blocked by `Ghi`.
+6. **PathGuard every path input.** Whitelist from `WFVERIFY_ALLOWED_ROOTS` (`;`-separated), else working dir + upward search for `.sln`/`.git`/`plan.md`. Launched processes use `ProcessStartInfo.ArgumentList`, never concatenated command lines, with `UseShellExecute = false`.
+7. **No orphaned processes, and never kill what you didn't launch.** Only terminate processes where `LaunchedByUs == true` — `wf_close_app` refuses otherwise and points at `wf_detach_app`, which drops the session without touching the process. This matters for apps a human had to log into or point at a specific SQL environment by hand. Dispose `UIA3Automation` to release COM.
+8. **Interaction fallback chains** (see `.agents/rules/ui-automation-rules.md`): Invoke → `InvokePattern` → `SelectionItem` → `LegacyIAccessible.DoDefaultAction` → physical click; SetValue → `ValuePattern` → focus + SendKeys; Toggle → `TogglePattern` → `SelectionItem` → Invoke.
+9. **Images are raw bytes.** `ImageContentBlock.Data` takes `ReadOnlyMemory<byte>`; the SDK base64-encodes. Downscale before returning (cap ~4MB).
 
 ## Conventions
 

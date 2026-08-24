@@ -4,6 +4,43 @@ Tất cả các thay đổi, bổ sung và quá trình triển khai dự án **W
 
 ---
 
+## [1.3.0] - 2026-08-22
+
+Đợt sửa theo báo cáo kiểm thử thực tế trên ứng dụng QLSX (DotNetBar + DevExpress + C1FlexGrid, MDI, SQL production).
+
+### 🐞 P0 — lỗi làm sai kết quả kiểm thử
+
+- **`wf_select` báo thành công giả.** `SelectionItem.Pattern.Select()` được gọi rồi trả ngay `"Đã chọn mục 'X'"` mà không đọc lại. Nay mọi tool thao tác đều xác minh hậu điều kiện: `Select` đọc lại `Selection` của container (hoặc giá trị hiển thị), `Toggle` đọc lại `ToggleState`, `Invoke` đọc lại Toggle/SelectionItem nếu control có trạng thái. Không khớp → thử `Click()` vật lý → vẫn không khớp thì trả `warnings` thay vì `ok` trơn.
+- **Thông báo lỗi sai khi `index` ngoài phạm vi.** Combo rỗng + `index: 1` rơi xuống nhánh cuối và báo "Cần cung cấp ít nhất tham số 'item' hoặc 'index'". Nhánh `index` nay tách riêng: `"index 1 nằm ngoài phạm vi: danh sách 'cboDonVi' có 0 mục"`.
+- **Khớp `item` bằng `Contains` chọn nhầm.** `"May 1"` trúng `"May 10"`, `"Tổ 1"` trúng `"Tổ 11"`. Thêm `Services/ItemMatcher.cs`: khớp chính xác trước, Contains sau; Contains trúng >1 mục → lỗi `AMBIGUOUS` kèm danh sách `[index] tên`.
+
+### 🧩 P1 — control thương mại & form MDI
+
+- **Combo DevExpress/DotNetBar** (lộ ra là `Pane`, không `Selection`, không `ExpandCollapse`, không có `ListItem` con): `Select` tự click bung dropdown rồi tìm `ListItem`/`DataItem`/`TreeItem` trong **cửa sổ popup mới của cùng process** (dropdown của các thư viện này là top-level window riêng, không nằm trong cây của form). Enumerate theo PID bằng Win32, không đi qua desktop UIA. Chọn xong xác minh bằng giá trị đọc lại của chính control; thất bại thì gửi `ESC` để không bỏ lại dropdown chắn màn hình.
+- **`wf_grid_read` báo `totalCols = 0`.** C1FlexGrid không hỗ trợ `GridPattern`. Thứ tự suy luận số cột nay là `GridPattern` → header → số ô của dòng đầu tiên; kết quả trả thêm `headers`.
+- **`wf_grid_read` chậm.** `GetGridCellElement` dựng lại `AsDataGridView()` cho từng ô (50×20 = 1000 lần). Thay bằng `GridAccessor` cache `DataGridView`, mảng `Rows` và cells theo dòng.
+- **Form MDI child trả `WINDOW_NOT_FOUND`.** `windowSelector` chỉ khớp cửa sổ cấp cao nhất. Thêm `NativeWindows.GetMdiChildWindows` (duyệt con trực tiếp của `MDIClient` bằng `GetWindow`, không dùng `EnumChildWindows` vì hàm đó đệ quy cả Button/Label) → `ResolveWindow` và `wf_list_windows` thấy được form con; lỗi `WINDOW_NOT_FOUND` nay liệt kê các form MDI đang mở và gợi ý selector phân cấp.
+- **Trùng id giữa các tab.** `id:fg` nay ưu tiên control đang hiển thị (`FirstPreferringVisible`), tức tab đang active; muốn nhắm tab khác thì dùng selector phân cấp `id:tabTheoDoi > id:fg` — đã ghi rõ trong `[Description]` của tham số `windowSelector` và trong `CLAUDE.md`.
+
+### 🔒 P2 — môi trường production
+
+- **`WFVERIFY_READONLY=1`**: chặn `wf_set_value`, `wf_grid_set_cell` (`READONLY_MODE`), và chặn `wf_invoke` vào control có nhãn khớp danh sách ghi dữ liệu (`Ghi`, `Lưu`, `Xóa`, `Cập nhật`, `Duyệt`, `Save`, `Delete`, `Update`, `Insert`, `Submit`, `Apply`; tuỳ biến bằng `WFVERIFY_READONLY_BLOCKLIST`). So khớp theo ranh giới từ nên `Nghiên cứu` không bị chặn bởi `Ghi`.
+- **Credential không phải nằm trên command line.** `wf_launch_app` thêm `argumentsFile` (mảng JSON hoặc file text mỗi dòng một tham số) và placeholder `${env:TEN_BIEN}` / `${file:path.json#key.con}` / `${file:path.txt}` dùng được trong cả `arguments` lẫn `environment`. Đường dẫn vẫn đi qua `PathGuard`.
+- **➕ `wf_grid_find` (tool mới, tổng số tool: 28)**: tìm dòng theo điều kiện trên một cột (`column` nhận tên header hoặc chỉ số, `op` = `contains`/`equals`/`startswith`), trả `rowIndex` + nội dung dòng. Thay cho việc kéo cả bảng 2000 dòng về rồi tự lọc.
+
+### 🧪 Kiểm thử
+
+- Unit mới: `ItemMatcherTests` (6), `ReadOnlyGuardTests` (12), `ArgumentResolverTests` (8).
+- Integration mới `SelectVerifyGridFindTests` (3, chạy trên SampleApp thật): xác minh hậu điều kiện của `Select` + lblFilterResult của app đổi theo, `index` ngoài phạm vi báo đúng, `AMBIGUOUS` khi `"Sản phẩm 1"` trúng 10 mục, khớp chính xác `"Sản phẩm 10"` vẫn chọn được, `GridRead` trả đúng 6 cột × 50 dòng, `GridFind` tìm đúng `DH0007` ở dòng 6, và chế độ chỉ-đọc chặn `set_value`/`invoke` trước khi chạm vào app.
+- Tổng: **57 test pass** (44 unit + 13 integration).
+
+### 📖 Tài liệu & DX
+
+- **`install.ps1`** (mới, ở gốc repo): tự `dotnet publish`, tự suy ra đường dẫn `.exe` từ vị trí thực tế của repo (không hardcode) rồi đăng ký thẳng với client — `-Client claude-code` gọi `claude mcp add`, `-Client claude-desktop|cursor|antigravity` tự merge vào file JSON tương ứng kèm backup trước khi ghi đè, mặc định (`-Client print`) chỉ in JSON để dán tay cho client khác. Thay cho việc tự publish rồi copy-paste JSON đường dẫn tuyệt đối theo cách cũ.
+- `docs/index.html` cập nhật đồng bộ với 1.3.0: số liệu (28 tools, 15 rules, 57 tests), thêm mục cho `wf_detach_app` và `wf_grid_find` (trước đó thiếu hẳn trong tài liệu dù đã có trong server), thêm phần **Ràng buộc Môi trường & Bảo mật** mà mục lục đã trỏ tới (`#security`) nhưng chưa từng tồn tại, thêm mã lỗi `READONLY_MODE`/`AMBIGUOUS`/`WINDOW_NOT_FOUND` và ghi chú selector cửa sổ MDI/tab-scoping.
+
+---
+
 ## [1.2.0] - 2026-08-21
 
 ### 🐞 Một cửa sổ treo của ứng dụng KHÁC làm chết toàn bộ server (nghiêm trọng)

@@ -15,6 +15,10 @@ public static class UiInteractionTools
         Click hoặc kích hoạt một control (Button, Link, ToolStripButton, CheckBox, ...) thông qua chuỗi fallback thông minh:
         InvokePattern -> SelectionItem.Select -> LegacyIAccessible.DoDefaultAction -> Click vật lý.
         Sau khi click, tự động phát hiện nếu có Modal Dialog mới xuất hiện để cảnh báo.
+        Nếu control CÓ trạng thái đọc được (Toggle/SelectionItem), trạng thái sẽ được đọc lại sau khi click và
+        đưa vào 'warnings' nếu không đổi — đừng coi 'ok' là bằng chứng thao tác đã có tác dụng khi có warning.
+        Ở chế độ chỉ-đọc (WFVERIFY_READONLY=1), control có nhãn khớp danh sách ghi dữ liệu (Ghi, Lưu, Xóa, Cập nhật, Duyệt...)
+        sẽ bị chặn với lỗi READONLY_MODE.
         """)]
     public static async Task<CallToolResult> Invoke(
         UiSession session,
@@ -22,7 +26,7 @@ public static class UiInteractionTools
         InteractionService interaction,
         [Description("Selector của control cần click (vd 'id:btnLogin' hoặc 'name:Đăng nhập').")]
         string selector,
-        [Description("Selector của cửa sổ mục tiêu (tùy chọn).")]
+        [Description("Selector của cửa sổ mục tiêu (tùy chọn). Chỉ khớp cửa sổ cấp cao nhất và form MDI child, KHÔNG khớp tab/panel — để giới hạn theo tab hãy dùng selector phân cấp.")]
         string? windowSelector = null,
         CancellationToken ct = default)
     {
@@ -44,6 +48,7 @@ public static class UiInteractionTools
         Nhập dữ liệu text vào TextBox, Edit control, MaskedTextBox.
         Tự động fallback sang Focus + SendKeys nếu control không hỗ trợ ValuePattern trực tiếp.
         Nếu 'verify=true', sẽ đọc lại giá trị sau khi gán và cảnh báo nếu không khớp.
+        Bị chặn hoàn toàn (lỗi READONLY_MODE) khi server chạy với WFVERIFY_READONLY=1.
         """)]
     public static async Task<CallToolResult> SetValue(
         UiSession session,
@@ -78,6 +83,8 @@ public static class UiInteractionTools
     [Description("""
         Bật/tắt trạng thái của CheckBox hoặc RadioButton.
         Hỗ trợ các trạng thái 'on', 'off', hoặc 'toggle'.
+        Sau khi gọi TogglePattern, đọc lại ToggleState để xác minh; nếu chưa đổi thì click vật lý,
+        vẫn chưa đổi thì trả về 'warnings' kèm trạng thái thực tế.
         """)]
     public static async Task<CallToolResult> Toggle(
         UiSession session,
@@ -107,6 +114,10 @@ public static class UiInteractionTools
     [McpServerTool(Name = "wf_select")]
     [Description("""
         Chọn một mục trong ComboBox, ListBox, ListView, TabControl hoặc TreeView theo tên item hoặc chỉ số index.
+        Sau khi chọn, LUÔN đọc lại selection của container để xác minh; nếu không đổi thì thử click vật lý,
+        vẫn không đổi thì trả về 'warnings' thay vì báo thành công trơn.
+        Với combo của DevExpress/DotNetBar (lộ ra là Pane, không có ListItem con), tool tự click bung dropdown
+        rồi tìm item trong cửa sổ popup riêng của ứng dụng.
         """)]
     public static async Task<CallToolResult> Select(
         UiSession session,
@@ -114,7 +125,7 @@ public static class UiInteractionTools
         InteractionService interaction,
         [Description("Selector của ComboBox/ListBox/TabControl.")]
         string selector,
-        [Description("Tên hoặc nhãn của item cần chọn (vd 'Hà Nội').")]
+        [Description("Tên hoặc nhãn của item cần chọn (vd 'Hà Nội'). Khớp CHÍNH XÁC được ưu tiên; nếu chỉ khớp-chứa và trúng nhiều mục thì trả lỗi AMBIGUOUS kèm danh sách thay vì chọn nhầm.")]
         string? item = null,
         [Description("Chỉ số index (0-based) của item cần chọn.")]
         int? index = null,
@@ -250,6 +261,9 @@ public static class UiInteractionTools
     [Description("""
         Đọc dữ liệu từ DataGridView / Table thành bảng text có cấu trúc dòng/cột.
         Dùng tool này THAY VÌ bắt AI Vision đọc từ ảnh screenshot để đảm bảo độ chính xác 100% và tiết kiệm token.
+        Với bảng nhiều dòng, dùng wf_grid_find để lọc theo cột thay vì kéo cả bảng về.
+        Số cột được suy ra từ GridPattern, header, rồi tới số ô của dòng đầu tiên (grid bên thứ ba như C1FlexGrid
+        không hỗ trợ GridPattern nên luôn trả ColumnCount = 0).
         """)]
     public static async Task<CallToolResult> GridRead(
         UiSession session,
@@ -280,8 +294,50 @@ public static class UiInteractionTools
         });
     }
 
+    [McpServerTool(Name = "wf_grid_find")]
+    [Description("""
+        Tìm các dòng trong DataGridView/Table theo điều kiện trên MỘT cột, trả về chỉ số dòng + nội dung dòng đó.
+        Dùng thay cho wf_grid_read khi bảng nhiều dòng: không phải kéo cả bảng về rồi tự lọc.
+        Trả về meta.matches (mảng {rowIndex, cells}) để dùng tiếp với wf_grid_set_cell hoặc selector 'grid:row,col'.
+        """)]
+    public static async Task<CallToolResult> GridFind(
+        UiSession session,
+        ElementLocator locator,
+        InteractionService interaction,
+        [Description("Selector của DataGridView (vd 'id:dgOrders').")]
+        string selector,
+        [Description("Tên cột (theo header, khớp chính xác trước rồi mới khớp chứa) hoặc chỉ số cột 0-based.")]
+        string column,
+        [Description("Giá trị cần tìm trong cột đó.")]
+        string value,
+        [Description("Cách so khớp: 'contains' (mặc định), 'equals', 'startswith'. Không phân biệt hoa thường.")]
+        string op = "contains",
+        [Description("Số dòng khớp tối đa trả về. Mặc định 20.")]
+        int maxMatches = 20,
+        [Description("Chỉ số dòng bắt đầu quét (0-based). Mặc định 0.")]
+        int startRow = 0,
+        [Description("Selector của cửa sổ mục tiêu.")]
+        string? windowSelector = null,
+        CancellationToken ct = default)
+    {
+        return await McpResults.GuardAsync(async () =>
+        {
+            var res = await session.RunAsync(() =>
+            {
+                var window = session.ResolveWindow(windowSelector);
+                var element = locator.Resolve(window, selector, TimeSpan.FromSeconds(5));
+                return interaction.GridFind(element, column, value, op, maxMatches, startRow);
+            }, TimeSpan.FromSeconds(30), ct);
+
+            return McpResults.Ok(new { resultText = res.Message, meta = res.Data }, res.Warnings);
+        });
+    }
+
     [McpServerTool(Name = "wf_grid_set_cell")]
-    [Description("Chỉnh sửa giá trị của một ô (Cell) trong DataGridView theo chỉ số dòng (row) và cột (col).")]
+    [Description("""
+        Chỉnh sửa giá trị của một ô (Cell) trong DataGridView theo chỉ số dòng (row) và cột (col).
+        Bị chặn hoàn toàn (lỗi READONLY_MODE) khi server chạy với WFVERIFY_READONLY=1.
+        """)]
     public static async Task<CallToolResult> GridSetCell(
         UiSession session,
         ElementLocator locator,

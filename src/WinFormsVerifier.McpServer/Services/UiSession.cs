@@ -109,6 +109,38 @@ public sealed class UiSession : IDisposable
         return windows;
     }
 
+    /// <summary>
+    /// Các form MDI child đang mở bên trong những cửa sổ cấp cao nhất của process.
+    /// Cần thiết vì windowSelector chỉ khớp cửa sổ cấp cao nhất, nên form con kiểu
+    /// frmChuanBiSX trước đây luôn trả WINDOW_NOT_FOUND.
+    /// </summary>
+    public List<Window> GetMdiChildWindows()
+    {
+        EnsureAlive();
+
+        var result = new List<Window>();
+        foreach (var top in NativeWindows.GetProcessWindows(App!.ProcessId))
+        {
+            foreach (var child in NativeWindows.GetMdiChildWindows(top.Hwnd, App.ProcessId))
+            {
+                try
+                {
+                    var window = Automation.FromHandle(child.Hwnd)?.AsWindow();
+                    if (window != null)
+                    {
+                        result.Add(window);
+                    }
+                }
+                catch
+                {
+                    // cửa sổ vừa đóng giữa chừng — bỏ qua
+                }
+            }
+        }
+
+        return result;
+    }
+
     public Window ResolveWindow(string? selector = null)
     {
         EnsureAlive();
@@ -123,10 +155,27 @@ public sealed class UiSession : IDisposable
                 return matched;
             }
 
+            // Chưa thấy ở cấp cao nhất -> thử các form MDI child (app quản lý kiểu MDI hay dùng).
+            var mdiChildren = GetMdiChildWindows();
+            var matchedChild = FindWindowBySelector(mdiChildren, selector);
+            if (matchedChild != null)
+            {
+                return matchedChild;
+            }
+
+            var childTitles = mdiChildren
+                .Select(w => w.SafeName())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToList();
+
             throw new ToolException(
                 ErrorCode.WindowNotFound,
-                $"Không tìm thấy cửa sổ nào khớp với selector '{selector}'.",
-                "Gọi 'wf_list_windows' để xem danh sách tất cả các cửa sổ đang mở.");
+                $"Không tìm thấy cửa sổ nào khớp với selector '{selector}' (đã tìm cả cửa sổ cấp cao nhất lẫn form MDI child).",
+                childTitles.Count > 0
+                    ? $"Các form MDI child đang mở: [{string.Join(", ", childTitles)}]. " +
+                      "Nếu mục tiêu là control bên trong form con, có thể bỏ windowSelector và dùng selector phân cấp " +
+                      "kiểu 'name~:Chuẩn bị SX > id:fg'."
+                    : "Gọi 'wf_list_windows' để xem danh sách tất cả các cửa sổ đang mở.");
         }
 
         // 2. If selector is null, check for any active modal dialog first!
